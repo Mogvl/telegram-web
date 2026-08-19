@@ -15,7 +15,7 @@ import {WebRTCLineType} from '@lib/calls/sdpBuilder';
 import StreamManager from '@lib/calls/streamManager';
 import {Ssrc} from '@lib/calls/types';
 import {EncryptWorkerHost} from '@lib/calls/e2e/encryptWorkerHost';
-import {randomBytes} from '@lib/calls/e2e/crypto';
+import {ensureCryptoReady, randomBytes} from '@lib/calls/e2e/crypto';
 import {PrivateKey} from '@lib/calls/e2e/keys';
 import type {GroupParticipant} from '@lib/calls/e2e/tlTypes';
 import type {InputGroupCall, Update, Updates} from '@layer';
@@ -372,6 +372,10 @@ export class GroupCallsController extends EventListenerBase<{
        opts.input._ !== 'inputGroupCallInviteMessage') {
       throw new Error(`joinConference: unsupported call ref kind ${(opts.input as any)._}`);
     }
+    // libsodium-backed key expansion — wait for WASM init first, like the
+    // encryptWorker does (otherwise this races sodium.ready and throws
+    // "crypto_sign_seed_keypair is not a function" under parallel load).
+    await ensureCryptoReady();
     const seed = randomBytes(32);
     const tempSk = PrivateKey.fromSeed(seed);
     const publicKey = new Uint8Array(tempSk.publicKeyBytes);

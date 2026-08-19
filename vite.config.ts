@@ -169,6 +169,10 @@ export default defineConfig({
     // deps: {registerNodeLoader: true},
     pool: 'forks',
     globals: true,
+    // The DH-validation crypto tests (multi-thousand-bit primality checks)
+    // take ~3s alone and flake past the 5s default under full-suite CPU load.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     setupFiles: ['./src/tests/setup.ts']
   },
   server: serverOptions,

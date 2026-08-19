@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # ---------- build stage ----------
-FROM node:24-alpine AS build
+# NOTE: node:24 (glibc), NOT alpine: TypeScript 7 Native (@typescript/native)
+# only ships glibc prebuilt binaries and crashes on musl.
+FROM node:24 AS build
 
 WORKDIR /app
 

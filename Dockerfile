@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+
+# ---------- build stage ----------
+FROM node:24-alpine AS build
+
+WORKDIR /app
+
+# enable pnpm (version pinned via packageManager in package.json)
+RUN corepack enable
+
+# install dependencies first for better layer caching
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+# copy the rest of the source
+COPY . .
+
+# optional branding overrides (also settable in CI / compose build args)
+ARG TWEB_TITLE
+ARG TWEB_URL
+ARG TWEB_ORIGIN
+ENV TWEB_TITLE=$TWEB_TITLE TWEB_URL=$TWEB_URL TWEB_ORIGIN=$TWEB_ORIGIN
+
+# production build: typecheck + changelog + vite build + bundle check
+RUN pnpm run build
+
+# ---------- runtime stage ----------
+FROM nginx:1.27-alpine
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
+  CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1

@@ -1,0 +1,14 @@
+.git
+.claude
+.idea
+.vscode
+agent
+node_modules
+dist
+e2e
+snapshot-server
+test-results
+playwright-report
+*.log
+.env
+ssh.json

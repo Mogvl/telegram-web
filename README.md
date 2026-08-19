@@ -30,9 +30,22 @@ ghcr.io/mogvl/telegram-web:latest
 ### 方式一：绿联 NAS Docker 应用（推荐）
 
 1. 打开绿联 NAS 的 **Docker** 应用 → **Compose / 项目**
-2. 新建项目，粘贴 `docker-compose.yaml` 的内容（或直接上传该文件）
+2. 新建项目，粘贴下面的 `docker-compose.yaml` 内容（或直接上传该文件）
 3. 项目名随意（如 `telegram-web`），点击**部署**即可
 4. 浏览器打开 `http://<NAS-IP>:8080`
+
+`docker-compose.yaml` 完整内容：
+
+```yaml
+services:
+  telegram-web:
+    image: ghcr.io/mogvl/telegram-web:latest
+    container_name: telegram-web
+    ports: ["8080:80"]
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+```
 
 ### 方式二：SSH 命令行
 

@@ -1,26 +1,8 @@
-# Telegram Web — one-click production deployment (works on UGREEN NAS, Synology, any Docker host)
-#
-#   docker compose up -d        # pull from GHCR (recommended, zero local build)
-#   docker compose up -d --build # or build the image locally
-#
-# Open http://<nas-ip>:8080 in your browser.
-
 services:
   telegram-web:
     image: ghcr.io/mogvl/telegram-web:latest
     container_name: telegram-web
+    ports: ["8080:80"]
+    environment:
+      - TZ=Asia/Shanghai
     restart: unless-stopped
-    ports:
-      - "8080:80" # change the left port if 8080 is already taken
-    # To build locally instead of pulling from GHCR, uncomment:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    #   args:
-    #     TWEB_TITLE: "Telegram Web"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s

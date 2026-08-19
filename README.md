@@ -51,7 +51,7 @@ docker compose up -d --build
 
 ### 配置
 
-- 端口：默认 `8080:80`，如需改端口修改 `docker-compose.yaml` 中 `ports` 左侧数字
+- 端口：默认 `ports: ["8080:80"]`，如需改端口修改 `docker-compose.yaml` 中 `ports` 数组里的数字（如 `["5000:80"]`）
 - 域名 + HTTPS：在绿联 NAS 反向代理或路由器上把域名转发到该端口即可（客户端对 HTTP/HTTPS 无要求）
 
 ### 构建自定义（可选）

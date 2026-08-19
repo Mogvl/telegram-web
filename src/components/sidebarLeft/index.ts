@@ -11,9 +11,9 @@ import {DateData, fillTipDates} from '@helpers/date';
 import {MOUNT_CLASS_TO} from '@config/debug';
 import {AppSettingsTab} from '@components/solidJsTabs';
 import {AppNewChannelTab} from '@components/solidJsTabs/tabs';
-import {AppContactsTab} from '@components/solidJsTabs/tabs';
 import {AppArchivedTab} from '@components/solidJsTabs/tabs';
 import createNewGroupTab from '@components/sidebarLeft/tabs/createNewGroupTab';
+import showPickUserPopup from '@components/popups/pickUser';
 import I18n, {i18n} from '@lib/langPack';
 import ButtonMenu, {ButtonMenuItemOptions, ButtonMenuItemOptionsVerifiable} from '@components/buttonMenu';
 import {IS_APPLE, IS_MOBILE_SAFARI} from '@environment/userAgent';
@@ -681,12 +681,6 @@ export class AppSidebarLeft extends SidebarSlider {
       }
     };
 
-    const onContactsClick = () => {
-      closeTabsBefore(() => {
-        this.createTab(AppContactsTab).open();
-      });
-    };
-
     const moreSubmenu = createSubmenuTrigger({
       options: {
         text: 'MultiAccount.More',
@@ -733,10 +727,6 @@ export class AppSidebarLeft extends SidebarSlider {
         });
       },
       verify: () => !TEST_NO_STORIES
-    }, {
-      icon: 'user',
-      text: 'Contacts',
-      onClick: onContactsClick
     }, {
       id: 'settings',
       icon: 'settings',
@@ -1057,9 +1047,14 @@ export class AppSidebarLeft extends SidebarSlider {
       });
     };
 
-    const onContactsClick = () => {
-      closeTabsBefore(() => {
-        this.createTab(AppContactsTab).open();
+    const onNewPrivateChatClick = () => {
+      showPickUserPopup({
+        titleLangKey: 'NewPrivateChat',
+        peerType: ['contacts'],
+        placeholder: 'Search',
+        onSelect: (chosen) => {
+          appImManager.setPeer({peerId: chosen[0].peerId});
+        }
       });
     };
 
@@ -1078,7 +1073,7 @@ export class AppSidebarLeft extends SidebarSlider {
     }, {
       icon: 'newprivate',
       text: singular ? 'PrivateChat' : 'NewPrivateChat',
-      onClick: onContactsClick
+      onClick: onNewPrivateChatClick
     }];
   }
 

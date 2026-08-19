@@ -39,9 +39,9 @@ import {openInstantViewInAppBrowser} from '@components/browser';
 import SolidJSHotReloadGuardProvider from '@lib/solidjs/hotReloadGuardProvider';
 import cancelEvent from '@helpers/dom/cancelEvent';
 import appSidebarLeft from '@components/sidebarLeft';
-import {AppContactsTab} from '@components/solidJsTabs/tabs';
 import {AppNewChannelTab} from '@components/solidJsTabs/tabs';
 import showCreateContactPopup from '@components/popups/createContact';
+import showPickUserPopup from '@components/popups/pickUser';
 import createNewGroupTab from '@components/sidebarLeft/tabs/createNewGroupTab';
 import {AppEditProfileTab, AppSettingsTab, getEditProfileInitArgs} from '@components/solidJsTabs';
 import showBirthdayPopup, {saveMyBirthday} from '@components/popups/birthday';
@@ -726,7 +726,15 @@ export class InternalLinkProcessor {
           case 'group':
             return createNewGroupTab(appSidebarLeft);
           default:
-            return appSidebarLeft.createTab(AppContactsTab).open();
+            // New Private Chat — pick a user from the picker popup (no separate contacts page)
+            return showPickUserPopup({
+              titleLangKey: 'NewPrivateChat',
+              peerType: ['contacts'],
+              placeholder: 'Search',
+              onSelect: (chosen) => {
+                appImManager.setPeer({peerId: chosen[0].peerId});
+              }
+            });
         }
       }
     });
@@ -770,12 +778,8 @@ export class InternalLinkProcessor {
       }
     });
 
-    // tg://contacts/
-    // tg://contacts/search
-    // tg://contacts/sort
-    // tg://contacts/new
-    // tg://contacts/invite
-    // tg://contacts/manage
+    // tg://contacts/ — the contacts (address book) feature is removed.
+    // Only the "add contact" action remains.
     addAnchorListener<{
       pathnameParams: [InternalLink.InternalLinkContacts['type'] | '']
     }>({
@@ -786,9 +790,9 @@ export class InternalLinkProcessor {
         switch(type) {
           case 'new':
             return showCreateContactPopup();
-          case 'search':
-          case '':
-            return appSidebarLeft.createTab(AppContactsTab).open();
+          // case 'search':
+          // case '':
+          //   Address book page removed — no contacts feature.
           // case 'invite':
           // case 'manage':
           // case 'sort':

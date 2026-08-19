@@ -33,11 +33,8 @@ import replaceContent from '@helpers/dom/replaceContent';
 import highlightText, {TextHighlight} from '@helpers/dom/textHighlight';
 import ConnectionStatusComponent from '@components/connectionStatus';
 import {renderImageFromUrlPromise} from '@helpers/dom/renderImageFromUrl';
-import {fastRafPromise} from '@helpers/schedulers';
-import SortedUserList from '@components/sortedUserList';
 import IS_TOUCH_SUPPORTED from '@environment/touchSupport';
 import handleTabSwipe from '@helpers/dom/handleTabSwipe';
-import windowSize from '@helpers/windowSize';
 import isInDOM from '@helpers/dom/isInDOM';
 import {setSendingStatus} from '@components/sendingStatus';
 import {SortedElementBase} from '@helpers/sortedList';
@@ -67,12 +64,10 @@ import cancelEvent from '@helpers/dom/cancelEvent';
 import noop from '@helpers/noop';
 import pause from '@helpers/schedulers/pause';
 import apiManagerProxy from '@lib/apiManagerProxy';
-import filterAsync from '@helpers/array/filterAsync';
 import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
 import {getMiddleware, MiddlewareHelper} from '@helpers/middleware';
 import getDialogMentionBadgeState from '@helpers/dialogMentionBadgeState';
 import Row, {RowMediaSizeType} from '@components/row'
-import SettingSection from '@components/settingSection';
 import getMessageThreadId from '@appManagers/utils/messages/getMessageThreadId';
 import formatNumber from '@helpers/number/formatNumber';
 import AppSharedMediaTab from '@components/sidebarRight/tabs/sharedMediaTab';
@@ -736,16 +731,10 @@ export class AppDialogsManager {
 
   private lastActiveElements: Set<HTMLElement> = new Set();
 
-  public loadContacts: () => void;
-  public processContact: (peerId: PeerId) => void;
-
   private initedListeners = false;
 
   public onListLengthChange: () => Promise<void>;
   private allChatsIntlElement: I18n.IntlElement;
-
-  private emptyDialogsPlaceholderSubtitle: I18n.IntlElement;
-  private updateContactsLengthPromise: Promise<number>;
 
   private filtersNavigationItem: NavigationItem;
 
@@ -789,7 +778,7 @@ export class AppDialogsManager {
     this.lazyLoadQueue = new LazyLoadQueue(5, true);
 
     // this.onListLengthChange = debounce(this._onListLengthChange, 100, false, true);
-    this.onListLengthChange = () => void this._onListLengthChange();
+    this.onListLengthChange = () => void this.checkIfPlaceholderNeeded();
 
     const bottomPart = this.bottomPart = document.createElement('div');
     bottomPart.classList.add('connection-status-bottom');
@@ -1077,10 +1066,6 @@ export class AppDialogsManager {
           dialogElement
         });
       }
-    });
-
-    rootScope.addEventListener('contacts_update', (userId) => {
-      this.processContact?.(userId.toPeerId());
     });
 
     appImManager.addEventListener('peer_changed', ({peerId, threadId, monoforumThreadId, isForum}) => {
@@ -1593,17 +1578,8 @@ export class AppDialogsManager {
       const img = document.createElement('img');
       img.classList.add('empty-placeholder-dialogs-icon');
 
-      this.emptyDialogsPlaceholderSubtitle = new I18n.IntlElement({
-        element: placeholder.subtitle
-      });
-
-      Promise.all([
-        this.updateContactsLength(false),
-        renderImageFromUrlPromise(img, 'assets/img/EmptyChats.svg'),
-        fastRafPromise()
-      ]).then(([usersLength]) => {
+      renderImageFromUrlPromise(img, 'assets/img/EmptyChats.svg').then(() => {
         placeholderContainer.classList.add('visible');
-        part.classList.toggle('has-contacts', !!usersLength);
       });
 
       placeholderContainer.prepend(img);
@@ -1645,150 +1621,6 @@ export class AppDialogsManager {
     part.classList.add('with-placeholder');
     part.dataset.placeholderType = type;
   }
-
-  private updateContactsLength(updatePartClassName: boolean) {
-    return this.updateContactsLengthPromise ??= this.managers.appUsersManager.getContacts().then((users) => {
-      const subtitle = this.emptyDialogsPlaceholderSubtitle;
-      if(subtitle) {
-        let key: LangPackKey, args: FormatterArguments;
-
-        if(users.length/*  && false */) {
-          key = 'ChatList.Main.EmptyPlaceholder.Subtitle';
-          args = [i18n('Contacts.Count', [users.length])];
-        } else {
-          key = 'ChatList.Main.EmptyPlaceholder.SubtitleNoContacts';
-          args = [];
-        }
-
-        subtitle.compareAndUpdate({
-          key,
-          args
-        });
-      }
-
-      if(updatePartClassName) {
-        const chatList = this.chatList;
-        const part = chatList.parentElement as HTMLElement;
-        part.classList.toggle('has-contacts', !!users.length);
-      }
-
-      this.updateContactsLengthPromise = undefined;
-
-      return users.length;
-    });
-  }
-
-  private removeContactsPlaceholder() {
-    const chatList = this.chatList;
-    const parts = chatList.parentElement.parentElement;
-    const bottom = chatList.parentElement.nextElementSibling as HTMLElement;
-    parts.classList.remove('with-contacts');
-    bottom.replaceChildren();
-    this.loadContacts = undefined;
-    this.processContact = undefined;
-  }
-
-  private _onListLengthChange = () => {
-    this.checkIfPlaceholderNeeded();
-
-    if(this.filterId !== FOLDER_ID_ALL) return;
-
-    // return;
-    const chatList = this.chatList;
-    const count = this.xd?.sortedList.itemsLength() || 0;
-
-    const parts = chatList.parentElement.parentElement;
-    const bottom = chatList.parentElement.nextElementSibling as HTMLElement;
-    const hasContacts = !!bottom.childElementCount;
-
-    if(count >= 10) {
-      if(hasContacts) {
-        this.removeContactsPlaceholder();
-      }
-
-      return;
-    } else if(hasContacts) return;
-
-    parts.classList.add('with-contacts');
-
-    const section = new SettingSection({
-      name: 'Contacts',
-      noDelimiter: true,
-      fakeGradientDelimiter: true
-    });
-
-    section.container.classList.add('sidebar-left-contacts-section', 'hide');
-
-    this.managers.appUsersManager.getContactsPeerIds(undefined, undefined, 'online').then((contacts) => {
-      let ready = false;
-      const onListLengthChange = () => {
-        if(ready) {
-          section.container.classList.toggle('hide', !sortedUserList.list.childElementCount);
-        }
-
-        this.updateContactsLength(true);
-      };
-
-      const sortedUserList = new SortedUserList({
-        avatarSize: 'abitbigger',
-        createChatListOptions: {
-          dialogSize: 48,
-          new: true
-        },
-        autonomous: false,
-        onListLengthChange,
-        managers: this.managers,
-        middleware: undefined
-      });
-
-      this.loadContacts = () => {
-        const pageCount = windowSize.height / 60 | 0;
-        const promise = filterAsync(contacts.splice(0, pageCount), this.verifyPeerIdForContacts);
-
-        promise.then((arr) => {
-          arr.forEach((peerId) => {
-            sortedUserList.add(peerId);
-          });
-        });
-
-        if(!contacts.length) {
-          this.loadContacts = undefined;
-        }
-      };
-
-      this.loadContacts();
-
-      this.processContact = async(peerId) => {
-        if(peerId.isAnyChat()) {
-          return;
-        }
-
-        const good = await this.verifyPeerIdForContacts(peerId);
-        const added = sortedUserList.has(peerId);
-        if(!added && good) sortedUserList.add(peerId);
-        else if(added && !good) sortedUserList.delete(peerId);
-      };
-
-      const list = sortedUserList.list;
-      list.classList.add('chatlist-new');
-      this.setListClickListener({list});
-      section.content.append(list);
-
-      ready = true;
-      onListLengthChange();
-    });
-
-    bottom.append(section.container);
-  };
-
-  private verifyPeerIdForContacts = async(peerId: PeerId) => {
-    const [isContact, dialog] = await Promise.all([
-      this.managers.appPeersManager.isContact(peerId),
-      this.managers.appMessagesManager.getDialogOnly(peerId)
-    ]);
-
-    return isContact && !dialog;
-  };
 
   public onSomeDrawerToggle?: () => void;
 

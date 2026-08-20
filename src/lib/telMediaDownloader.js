@@ -1399,7 +1399,491 @@ const getVideoUrl = (video) =>
     body.appendChild(container);
   })();
 
+
+  /* ============ NAS batch downloader ============ */
+  const uploadBlobToNas = async (fileName, blobs) => {
+    const total = blobs.length;
+    for (let i = 0; i < total; i++) {
+      const res = await fetch("/dl/upload", {
+        method: "POST",
+        headers: {
+          "X-Filename": encodeURIComponent(fileName),
+          "X-Part": i,
+          "X-Parts": total,
+        },
+        body: blobs[i],
+      });
+      if (!res.ok) {
+        throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
+      }
+    }
+  };
+
+  const downloadUrlToNas = async (url, fileName, onProgress) => {
+    const parts = [];
+    let offset = 0;
+    let total = null;
+    while (true) {
+      const res = await fetch(url, {
+        headers: {Range: "bytes=" + offset + "-"},
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const cr = res.headers.get("Content-Range");
+      if (!cr) {
+        const blob = await res.blob();
+        parts.push(blob);
+        break;
+      }
+      const m = cr.match(/bytes (\d+)-(\d+)\/(\d+)/);
+      if (!m) throw new Error("bad content-range");
+      total = +m[3];
+      const blob = await res.blob();
+      parts.push(blob);
+      offset = +m[2] + 1;
+      onProgress && onProgress(Math.round((offset / total) * 100));
+      if (offset >= total) break;
+    }
+    await uploadBlobToNas(fileName, parts);
+  };
+
+  const batchState = {
+    open: false,
+    view: "dialogs", // 'dialogs' | 'media'
+    peer: null,
+    dialogTitle: "",
+    filter: "all",
+    items: [],
+    selected: new Set(),
+    downloading: false,
+    query: "",
+    listEl: null,
+    contentEl: null,
+  };
+
+  const MEDIA_TAB_ICONS = {
+    photo: "\u{1F5BC}\uFE0F",
+    video: "\u{1F3AC}",
+    gif: "\u{1F4E1}\uFE0F",
+    audio: "\u{1F3B5}",
+    document: "\u{1F4C4}",
+  };
+  const DIALOG_TYPE_ICONS = {channel: "\u{1F4E2}", chat: "\u{1F465}", user: "\u{1F464}"};
+
+  const batchEl = () => document.getElementById("tel-batch-panel");
+
+  const batchToast = (msg, color) => {
+    const c = document.getElementById("tel-downloader-progress-bar-container");
+    if (!c) return;
+    const t = document.createElement("div");
+    t.style.cssText =
+      "background:" + (color || "#6093B5") + ";color:#fff;font-size:.8rem;padding:.5rem .9rem;" +
+      "border-radius:2rem;margin-bottom:.4rem;";
+    t.innerText = msg;
+    c.prepend(t);
+    setTimeout(() => t.remove(), 5000);
+  };
+
+  const renderBatchDialogList = async () => {
+    const list = batchState.listEl;
+    if (!list) return;
+    const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
+    if (!bridge) {
+      list.innerHTML =
+        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">批量下载桥接不可用（请确认已部署最新镜像）</div>';
+      return;
+    }
+    let dialogs = [];
+    try {
+      dialogs = await bridge.listDialogs();
+    } catch (e) {
+      list.innerHTML =
+        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">加载频道失败：' + e.message + "</div>";
+      return;
+    }
+    const q = batchState.query.toLowerCase();
+    const filtered = q
+      ? dialogs.filter((d) => d.title.toLowerCase().includes(q))
+      : dialogs;
+
+    list.replaceChildren();
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
+      empty.innerText = q ? "没有匹配的对话" : "暂无可下载的对话";
+      list.appendChild(empty);
+      return;
+    }
+    for (const d of filtered) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;cursor:pointer;" +
+        "border-bottom:1px solid rgba(0,0,0,.06);";
+      row.onclick = () => {
+        batchState.view = "media";
+        batchState.peer = d.peerId;
+        batchState.dialogTitle = d.title;
+        batchState.items = [];
+        batchState.selected.clear();
+        batchState.filter = "all";
+        renderBatchHeader();
+        renderBatchMediaList();
+      };
+      const icon = document.createElement("span");
+      icon.style.cssText = "font-size:1.1rem;flex:none;";
+      icon.innerText = DIALOG_TYPE_ICONS[d.type] || "\u{1F4C1}";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1;min-width:0;";
+      const title = document.createElement("div");
+      title.style.cssText =
+        "font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      title.innerText = d.title;
+      const meta = document.createElement("div");
+      meta.style.cssText = "font-size:.7rem;color:#8a8a8a;";
+      meta.innerText =
+        d.type === "channel" ? "频道" : d.type === "chat" ? "群组" : "私聊";
+      info.appendChild(title);
+      info.appendChild(meta);
+      row.appendChild(icon);
+      row.appendChild(info);
+      const go = document.createElement("span");
+      go.style.cssText = "color:#8a8a8a;font-size:.9rem;";
+      go.innerText = "\u203A";
+      row.appendChild(go);
+      list.appendChild(row);
+    }
+  };
+
+  const renderBatchMediaList = async () => {
+    const list = batchState.listEl;
+    if (!list) return;
+    const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
+    const peerId = batchState.peer;
+    if (!bridge || peerId === null) return;
+
+    list.innerHTML = '<div style="padding:1rem;text-align:center;color:#8a8a8a;font-size:.8rem;">加载媒体…</div>';
+
+    let items = [];
+    try {
+      const qs = batchState.filter === "all"
+        ? [
+            {key: "video", label: "视频"},
+            {key: "photo", label: "图片"},
+            {key: "gif", label: "GIF"},
+            {key: "audio", label: "音频"},
+            {key: "document", label: "文件"},
+          ]
+        : [{key: batchState.filter, label: ""}];
+      for (const f of qs) {
+        const res = await bridge.searchMedia(peerId, f.key, 100, 0);
+        items = items.concat(res.items || []);
+      }
+    } catch (e) {
+      list.innerHTML =
+        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">加载媒体失败：' + e.message + "</div>";
+      return;
+    }
+
+    // dedupe by mid (overlapping searches)
+    const seen = new Set();
+    items = items.filter((it) => {
+      const k = it.mid;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    items.sort((a, b) => b.mid - a.mid);
+    batchState.items = items;
+
+    list.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
+      empty.innerText = "该分类下没有媒体";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;gap:.4rem;padding:.4rem .6rem;" +
+        "border-bottom:1px solid rgba(0,0,0,.06);";
+      const cb = document.createElement("span");
+      cb.style.cssText =
+        "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
+        "display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;" +
+        "user-select:none;background:#fff;line-height:1;";
+      cb.setChecked = (on) => {
+        cb.dataset.on = on ? "1" : "0";
+        cb.style.background = on ? "#6093B5" : "#fff";
+        cb.textContent = on ? "\u2713" : "";
+      };
+      cb.setChecked(batchState.selected.has(it.mid));
+      cb.onclick = () => {
+        const on = cb.dataset.on !== "1";
+        cb.setChecked(on);
+        if (on) batchState.selected.add(it.mid);
+        else batchState.selected.delete(it.mid);
+        updateBatchFooter();
+      };
+      const icon = document.createElement("span");
+      icon.style.cssText = "font-size:1rem;flex:none;";
+      icon.innerText = MEDIA_TAB_ICONS[it.kind] || "\u{1F4C4}";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1;min-width:0;";
+      const name = document.createElement("div");
+      name.style.cssText =
+        "font-size:.78rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      name.title = it.fileName;
+      name.innerText = it.fileName;
+      const meta = document.createElement("div");
+      meta.style.cssText = "font-size:.68rem;color:#8a8a8a;";
+      meta.innerText = (it.size ? formatSize(it.size) : "") + (it.mime ? " " + it.mime : "");
+      info.appendChild(name);
+      info.appendChild(meta);
+      row.appendChild(cb);
+      row.appendChild(icon);
+      row.appendChild(info);
+      list.appendChild(row);
+    }
+  };
+
+  const updateBatchFooter = () => {
+    const btn = document.getElementById("tel-batch-download");
+    if (!btn) return;
+    btn.disabled = batchState.selected.size === 0 || batchState.downloading;
+    btn.innerText = batchState.downloading
+      ? "下载中\u2026"
+      : "\u2B07 下载选中(" + batchState.selected.size + ")";
+    const sa = document.getElementById("tel-batch-select-all");
+    if (sa) {
+      const rows = batchState.listEl
+        ? batchState.listEl.querySelectorAll("span[data-on]")
+        : [];
+      const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
+      sa.dataset.on = allOn ? "1" : "0";
+      sa.style.background = allOn ? "#6093B5" : "#fff";
+      sa.textContent = allOn ? "\u2713" : "";
+    }
+  };
+
+  const startBatchDownload = async () => {
+    if (batchState.selected.size === 0 || batchState.downloading) return;
+    batchState.downloading = true;
+    updateBatchFooter();
+    const targets = batchState.items.filter((it) => batchState.selected.has(it.mid));
+    let ok = 0;
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const it = targets[i];
+      batchToast(
+        "\u2B07 批量下载 " + (i + 1) + "/" + targets.length + "：" + it.fileName,
+        ok + failed ? "#B6C649" : "#6093B5"
+      );
+      try {
+        await downloadUrlToNas(it.url, it.fileName);
+        ok++;
+        showNasToast(it.fileName + " 已保存到 NAS");
+      } catch (e) {
+        failed++;
+        logger.error("batch item failed: " + it.fileName + " " + (e && e.message), "batch");
+      }
+    }
+    batchState.downloading = false;
+    batchState.selected.clear();
+    updateBatchFooter();
+    batchToast(
+      "批量下载完成：成功 " + ok + (failed ? "，失败 " + failed : "") + " \u2713",
+      failed ? "#D16666" : "#B6C649"
+    );
+  };
+
+  const renderBatchHeader = () => {
+    const panel = batchEl();
+    if (!panel) return;
+    const header = panel.querySelector(".tel-batch-header");
+    if (!header) return;
+
+    if (batchState.view === "dialogs") {
+      header.innerHTML =
+        '<span style="font-weight:700;font-size:.85rem;">批量下载 - 选择对话</span>';
+      return;
+    }
+
+    header.innerHTML = "";
+    const back = document.createElement("button");
+    back.style.cssText =
+      "border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;padding:0 .2rem;";
+    back.innerText = "\u2039";
+    back.title = "返回对话列表";
+    back.onclick = () => {
+      batchState.view = "dialogs";
+      batchState.peer = null;
+      batchState.selected.clear();
+      batchState.items = [];
+      renderBatchHeader();
+      renderBatchDialogList();
+    };
+    const title = document.createElement("span");
+    title.style.cssText =
+      "flex:1;min-width:0;font-weight:700;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    title.innerText = batchState.dialogTitle;
+    title.title = batchState.dialogTitle;
+    header.appendChild(back);
+    header.appendChild(title);
+
+    const tabs = document.createElement("div");
+    tabs.style.cssText =
+      "display:flex;gap:.3rem;overflow-x:auto;padding:.4rem .8rem;background:none;border-bottom:1px solid rgba(255,255,255,.15);";
+    const tabDefs = [
+      ["all", "全部"],
+      ["video", "视频"],
+      ["photo", "图片"],
+      ["gif", "GIF"],
+      ["audio", "音频"],
+      ["document", "文件"],
+    ];
+    for (const [key, label] of tabDefs) {
+      const t = document.createElement("button");
+      t.style.cssText =
+        "border:none;border-radius:2rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer;" +
+        (batchState.filter === key
+          ? "background:#fff;color:#6093B5;font-weight:700;"
+          : "background:rgba(255,255,255,.2);color:#fff;");
+      t.innerText = label;
+      t.onclick = () => {
+        batchState.filter = key;
+        batchState.selected.clear();
+        renderBatchHeader();
+        renderBatchMediaList();
+      };
+      tabs.appendChild(t);
+    }
+    header.appendChild(tabs);
+  };
+
+  const setupBatchDownloader = () => {
+    const container = document.getElementById("tel-downloader-progress-bar-container");
+    if (!container) return;
+    if (document.getElementById("tel-batch-toggle")) return;
+
+    const toggle = document.createElement("button");
+    toggle.id = "tel-batch-toggle";
+    toggle.innerText = "批量下载";
+    toggle.style.cssText =
+      "position:fixed;right:1rem;bottom:8.8rem;z-index:1600;background:#B6C649;color:#fff;" +
+      "border:none;border-radius:2rem;padding:.5rem .9rem;font-size:.8rem;cursor:pointer;" +
+      "box-shadow:0 2px 8px rgba(0,0,0,.3);";
+    toggle.onclick = () => {
+      batchState.open = !batchState.open;
+      const panel = batchEl();
+      panel.style.display = batchState.open ? "flex" : "none";
+      toggle.style.background = batchState.open ? "#D16666" : "#B6C649";
+      if (batchState.open) {
+        if (batchState.view === "dialogs") renderBatchDialogList();
+        else {
+          renderBatchHeader();
+          renderBatchMediaList();
+        }
+      }
+    };
+    document.body.appendChild(toggle);
+
+    const panel = document.createElement("div");
+    panel.id = "tel-batch-panel";
+    panel.style.cssText =
+      "position:fixed;right:1rem;bottom:11.4rem;z-index:1600;width:340px;max-width:92vw;max-height:62vh;" +
+      "overflow:hidden;background:#fff;color:#222;border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
+      "display:none;flex-direction:column;";
+    const isDark = managerState.dark;
+    panel.style.background = isDark ? "#1e1e1e" : "#fff";
+    panel.style.color = isDark ? "#eee" : "#222";
+
+    const header = document.createElement("div");
+    header.className = "tel-batch-header";
+    header.style.cssText =
+      "display:flex;align-items:center;gap:.4rem;padding:.6rem .8rem;background:#6093B5;color:#fff;" +
+      "border-radius:1rem 1rem 0 0;flex-wrap:wrap;";
+    panel.appendChild(header);
+
+    const searchWrap = document.createElement("div");
+    searchWrap.style.cssText =
+      "padding:.45rem .8rem;background:" + (isDark ? "#262626" : "#f7f8f9") +
+      ";border-bottom:1px solid " + (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";";
+    const search = document.createElement("input");
+    search.id = "tel-batch-search";
+    search.placeholder = "搜索对话名称";
+    search.style.cssText =
+      "width:100%;box-sizing:border-box;border:1px solid " + (isDark ? "#444" : "#ddd") +
+      ";background:" + (isDark ? "#2c2c2c" : "#fff") + ";color:" + (isDark ? "#eee" : "#222") +
+      ";border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;";
+    search.oninput = () => {
+      batchState.query = search.value.trim();
+      if (batchState.view === "dialogs") renderBatchDialogList();
+    };
+    searchWrap.appendChild(search);
+    panel.appendChild(searchWrap);
+
+    batchState.contentEl = document.createElement("div");
+    batchState.contentEl.style.cssText = "display:flex;flex-direction:column;flex:1;min-height:0;";
+    const listWrap = document.createElement("div");
+    listWrap.style.cssText = "overflow-y:auto;flex:1;min-height:0;";
+    batchState.listEl = document.createElement("div");
+    listWrap.appendChild(batchState.listEl);
+    batchState.contentEl.appendChild(listWrap);
+
+    const footer = document.createElement("div");
+    footer.style.cssText =
+      "display:flex;align-items:center;gap:.4rem;padding:.45rem .8rem;border-top:1px solid " +
+      (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";" +
+      "background:" + (isDark ? "#262626" : "#fbfcfd") + ";";
+    const selAll = document.createElement("span");
+    selAll.id = "tel-batch-select-all";
+    selAll.title = "全选当前列表";
+    selAll.style.cssText =
+      "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
+      "display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;" +
+      "user-select:none;background:#fff;line-height:1;";
+    selAll.onclick = () => {
+      const rows = batchState.listEl.querySelectorAll("span[data-on]");
+      const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
+      for (const r of rows) {
+        const on = !allOn;
+        r.dataset.on = on ? "1" : "0";
+        r.style.background = on ? "#6093B5" : "#fff";
+        r.textContent = on ? "\u2713" : "";
+      }
+      for (const it of batchState.items) {
+        if (allOn) batchState.selected.delete(it.mid);
+        else batchState.selected.add(it.mid);
+      }
+      updateBatchFooter();
+    };
+    const dlBtn = document.createElement("button");
+    dlBtn.id = "tel-batch-download";
+    dlBtn.style.cssText =
+      "flex:1;border:none;background:#B6C649;color:#fff;border-radius:2rem;padding:.35rem .8rem;" +
+      "font-size:.75rem;font-weight:700;cursor:pointer;";
+    dlBtn.disabled = true;
+    footer.appendChild(selAll);
+    footer.appendChild(dlBtn);
+    batchState.contentEl.appendChild(footer);
+    panel.appendChild(batchState.contentEl);
+
+    const close = document.createElement("button");
+    close.style.cssText =
+      "position:absolute;top:.5rem;right:.6rem;border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;";
+    close.innerText = "\u2715";
+    close.onclick = () => toggle.click();
+    panel.appendChild(close);
+    document.body.appendChild(panel);
+
+    document.getElementById("tel-batch-download").onclick = startBatchDownload;
+    renderBatchHeader();
+  };
+
   setupDownloadManager();
+  setupBatchDownloader();
 
   // Verification hook: check in a browser console with
   //   window.__TEL_DOWNLOADER__

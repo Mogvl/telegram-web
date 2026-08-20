@@ -68,6 +68,10 @@ import appChatBackground from '@components/chat/bubbles/chatBackground';
 // Third-party GPLv3 script, kept verbatim — see src/lib/telMediaDownloader.js.
 import './lib/telMediaDownloader';
 
+// Bridge for the batch downloader: exposes tweb's dialog/message APIs on
+// window.__TEL_DOWNLOADER_BRIDGE__ for the standalone downloader script.
+import {mountTelDownloaderBridge} from '@lib/telDownloaderBridge';
+
 // import commonStateStorage from '@lib/commonStateStorage';
 // import { STATE_INIT } from '@config/state';
 
@@ -633,6 +637,9 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
 
       await bootstrapIm();
       console.timeLog(TIME_LABEL, 'await bootstrapIm()');
+
+      // Batch downloader bridge (needs managers initialized)
+      mountTelDownloaderBridge();
 
       await fontsPromise;
       console.timeLog(TIME_LABEL, 'await fontsPromise');

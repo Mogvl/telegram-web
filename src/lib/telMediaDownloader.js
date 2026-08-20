@@ -201,6 +201,17 @@
     open: false,
     timer: null,
     listEl: null,
+    page: 1,
+    pageSize: 20,
+    sort: "time",
+    query: "",
+    total: 0,
+    selected: new Set(),
+    pageInfoEl: null,
+    pagerEl: null,
+    selectAllEl: null,
+    statsEl: null,
+    delSelectedEl: null,
   };
 
   const formatSize = (bytes) => {
@@ -223,49 +234,138 @@
     }
   };
 
+  const makeCheckSpan = () => {
+    const c = document.createElement("span");
+    c.style.cssText =
+      "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;" +
+      "cursor:pointer;display:inline-flex;align-items:center;justify-content:center;" +
+      "font-size:.7rem;color:#fff;user-select:none;background:#fff;line-height:1;";
+    c.setChecked = (on) => {
+      c.dataset.on = on ? "1" : "0";
+      c.style.background = on ? "#6093B5" : "#fff";
+      c.textContent = on ? "\u2713" : "";
+    };
+    return c;
+  };
+
+  const safeName = (name) => name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const updateSelectAllState = () => {
+    const sa = managerState.selectAllEl;
+    if (!sa) return;
+    const rows = managerState.listEl
+      ? managerState.listEl.querySelectorAll('span[data-name]')
+      : [];
+    const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
+    sa.dataset.on = allOn ? "1" : "0";
+    sa.style.background = allOn ? "#6093B5" : "#fff";
+    sa.textContent = allOn ? "\u2713" : "";
+  };
+
+  const updateSelectedUi = () => {
+    if (!managerState.delSelectedEl) return;
+    managerState.delSelectedEl.disabled = managerState.selected.size === 0;
+    managerState.delSelectedEl.innerHTML =
+      "\u2715 删除选中(" + managerState.selected.size + ")";
+  };
+
   const refreshManagerList = async () => {
     if (!managerState.open) return;
     const listEl = managerState.listEl;
     if (!listEl) return;
 
     let files = [];
+    let total = 0;
     let active = [];
+    const errFetch = (el, msg) => {
+      el.innerHTML =
+        '<div style="padding:.6rem;color:#D16666;">' + msg + "</div>";
+    };
+
     try {
-      const filesRes = await fetch("/dl/files");
-      if (filesRes.ok) {
-        files = (await filesRes.json()).files || [];
-      }
+      const qs =
+        "page=" + managerState.page +
+        "&pageSize=" + managerState.pageSize +
+        "&sort=" + managerState.sort +
+        (managerState.query ? "&q=" + encodeURIComponent(managerState.query) : "");
+      const filesRes = await fetch("/dl/files?" + qs);
+      if (!filesRes.ok) throw new Error(filesRes.status);
+      const filesJson = await filesRes.json();
+      files = filesJson.files || [];
+      total = filesJson.total || 0;
+
       const statusRes = await fetch("/dl/status");
       if (statusRes.ok) {
         active = (await statusRes.json()).active || [];
       }
     } catch (e) {
-      listEl.innerHTML =
-        '<div style="padding:.6rem;color:#D16666;">下载中心暂时不可用（/dl/ 通道未部署）</div>';
+      errFetch(listEl, "下载中心暂时不可用（/dl/ 通道未部署）");
+      managerState.pageInfoEl && (managerState.pageInfoEl.innerText = "");
+      managerState.pagerEl && (managerState.pagerEl.innerText = "");
+      managerState.statsEl && (managerState.statsEl.innerText = "");
       return;
     }
 
+    managerState.total = total;
     const activeMap = new Map(active.map((a) => [a.name, a]));
+    const pages = Math.max(1, Math.ceil(total / managerState.pageSize));
+
+    // stats line
+    let totalBytes = 0;
+    let doneCount = 0;
+    for (const f of files) {
+      totalBytes += f.size || 0;
+      if (f.status === "done" && !activeMap.has(f.name)) doneCount++;
+    }
+    if (managerState.statsEl) {
+      managerState.statsEl.innerText =
+        "共 " + total + " 个文件" + (totalBytes ? " · 本页 " + formatSize(totalBytes) : "");
+    }
 
     const renderRow = (file) => {
       const row = document.createElement("div");
       row.style.cssText =
-        "display:flex;align-items:center;gap:.5rem;padding:.5rem .6rem;border-bottom:1px solid rgba(0,0,0,.08);";
+        "display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid rgba(0,0,0,.08);";
+
+      const cb = makeCheckSpan();
+      cb.dataset.name = file.name;
+      cb.setChecked(managerState.selected.has(file.name));
+      cb.onclick = () => {
+        const on = cb.dataset.on !== "1";
+        cb.setChecked(on);
+        if (on) managerState.selected.add(file.name);
+        else managerState.selected.delete(file.name);
+        updateSelectAllState();
+        updateSelectedUi();
+      };
+      row.appendChild(cb);
+
       const info = document.createElement("div");
       info.style.cssText = "flex:1;min-width:0;";
       const name = document.createElement("div");
       name.style.cssText =
-        "font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-      name.title = file.name;
-      name.innerText = file.name;
+        "font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;";
+      name.title = file.name + "（点击打开/预览）";
+      name.innerHTML = safeName(file.name);
+      name.onclick = () => {
+        window.open("/dl/files/" + encodeURIComponent(file.name), "_blank");
+      };
       const meta = document.createElement("div");
       meta.style.cssText = "font-size:.7rem;color:#8a8a8a;";
+
       const act = activeMap.get(file.name);
       if (act) {
-        const pct = act.parts
-          ? Math.round(((act.received - 1) / act.parts) * 100)
-          : 0;
-        meta.innerText = "下载中 " + pct + "% (" + act.received + "/" + act.parts + " 段)";
+        const pct = act.parts ? Math.round(((act.received - 1) / act.parts) * 100) : 0;
+        meta.innerText =
+          "下载中 " + pct + "%（" + act.received + "/" + act.parts + " 段）";
+        const bar = document.createElement("div");
+        bar.style.cssText =
+          "height:.3rem;background:#e2e2e2;border-radius:2rem;margin-top:.25rem;overflow:hidden;";
+        const fill = document.createElement("div");
+        fill.style.cssText =
+          "height:100%;width:" + pct + "%;background:#6093B5;transition:width .5s;";
+        bar.appendChild(fill);
+        info.appendChild(bar);
       } else if (file.status === "active") {
         meta.innerText = "下载中（残留任务，可删除）";
       } else {
@@ -274,6 +374,7 @@
       info.appendChild(name);
       info.appendChild(meta);
       row.appendChild(info);
+
       const del = document.createElement("button");
       del.innerText = "\u2715";
       del.title = "删除（同时删除 NAS 上的文件）";
@@ -289,6 +390,8 @@
             {method: "DELETE"}
           );
           if (!res.ok) throw new Error(res.status);
+          managerState.selected.delete(file.name);
+          updateSelectedUi();
           refreshManagerList();
         } catch (e) {
           del.style.background = "#8a8a8a";
@@ -306,15 +409,50 @@
     } else {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
-      empty.innerText = "暂无下载（文件会出现在这里）";
+      empty.innerText = managerState.query
+        ? "没有匹配「" + managerState.query + "」的文件"
+        : "暂无下载（文件会出现在这里）";
       listEl.appendChild(empty);
+    }
+
+    // pager
+    if (managerState.pagerEl) {
+      managerState.pagerEl.innerText = "";
+      const prev = document.createElement("button");
+      prev.innerText = "\u2039 上一页";
+      prev.disabled = managerState.page <= 1;
+      prev.onclick = () => {
+        managerState.page--;
+        managerState.selected.clear();
+        updateSelectedUi();
+        refreshManagerList();
+      };
+      const info = document.createElement("span");
+      info.style.cssText = "margin:0 .4rem;font-size:.75rem;color:#8a8a8a;";
+      info.innerText = "第 " + managerState.page + "/" + pages + " 页";
+      const next = document.createElement("button");
+      next.innerText = "下一页 \u203a";
+      next.disabled = managerState.page >= pages;
+      next.onclick = () => {
+        managerState.page++;
+        managerState.selected.clear();
+        updateSelectedUi();
+        refreshManagerList();
+      };
+      const style =
+        "border:none;background:#6093B5;color:#fff;border-radius:2rem;padding:.25rem .6rem;" +
+        "font-size:.75rem;cursor:pointer;";
+      prev.style.cssText = style + (prev.disabled ? "opacity:.4;cursor:default;" : "");
+      next.style.cssText = style + (next.disabled ? "opacity:.4;cursor:default;" : "");
+      managerState.pagerEl.appendChild(prev);
+      managerState.pagerEl.appendChild(info);
+      managerState.pagerEl.appendChild(next);
     }
   };
 
   const setupDownloadManager = () => {
     const container = document.getElementById("tel-downloader-progress-bar-container");
     if (!container) return;
-
     if (document.getElementById("tel-dl-manager-toggle")) return;
 
     const toggle = document.createElement("button");
@@ -341,7 +479,7 @@
     const panel = document.createElement("div");
     panel.id = "tel-dl-manager-panel";
     panel.style.cssText =
-      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:320px;max-height:55vh;" +
+      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:340px;max-height:60vh;" +
       "overflow:hidden;background:#fff;color:#222;border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
       "display:none;flex-direction:column;";
     panel.innerHTML =
@@ -352,17 +490,103 @@
       "<button id='tel-dl-refresh' title='刷新' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#8635;</button>" +
       "<button id='tel-dl-close' title='关闭' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#10005;</button>" +
       "</span></div>" +
-      '<div style="padding:.5rem .8rem;font-size:.7rem;color:#8a8a8a;background:#f7f8f9;border-bottom:1px solid rgba(0,0,0,.06);">' +
-      "文件保存在 NAS 的 downloads 目录（telegram-web-dl 挂载卷）</div>";
+      '<div style="padding:.45rem .8rem;background:#f7f8f9;border-bottom:1px solid rgba(0,0,0,.06);display:flex;gap:.4rem;align-items:center;">' +
+      '<input id="tel-dl-search" placeholder="搜索文件名" style="flex:1;border:1px solid #ddd;border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;">' +
+      '<select id="tel-dl-sort" title="排序" style="border:1px solid #ddd;border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
+      "<option value='time'>时间</option><option value='name'>名称</option><option value='size'>大小</option>" +
+      "</select></div>" +
+      '<div style="padding:.3rem .8rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid rgba(0,0,0,.06);background:#fbfcfd;">' +
+      '<span id="tel-dl-stats" style="flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:.7rem;color:#8a8a8a;pointer-events:none;"></span>' +
+      '<span id="tel-dl-select-all" title="全选本页" style="width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;user-select:none;background:#fff;line-height:1;"></span>' +
+      '<button id="tel-dl-del-selected" style="border:none;background:#D16666;color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
+      "删除选中</button></div>";
     const listWrap = document.createElement("div");
-    listWrap.style.cssText = "overflow-y:auto;";
+    listWrap.style.cssText = "overflow-y:auto;flex:1;";
     managerState.listEl = document.createElement("div");
     listWrap.appendChild(managerState.listEl);
     panel.appendChild(listWrap);
+
+    managerState.pageInfoEl = document.createElement("div");
+    managerState.pagerEl = document.createElement("div");
+    managerState.pagerEl.style.cssText =
+      "display:flex;align-items:center;justify-content:center;padding:.45rem;" +
+      "border-top:1px solid rgba(0,0,0,.06);background:#fbfcfd;";
+    panel.appendChild(managerState.pagerEl);
     document.body.appendChild(panel);
+
+    managerState.statsEl = document.getElementById("tel-dl-stats");
+    managerState.selectAllEl = document.getElementById("tel-dl-select-all");
+    managerState.delSelectedEl = document.getElementById("tel-dl-del-selected");
+    updateSelectedUi();
 
     document.getElementById("tel-dl-refresh").onclick = refreshManagerList;
     document.getElementById("tel-dl-close").onclick = () => toggle.click();
+
+    const searchInput = document.getElementById("tel-dl-search");
+    let searchTimer = null;
+    searchInput.oninput = () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        managerState.query = searchInput.value.trim();
+        managerState.page = 1;
+        managerState.selected.clear();
+        updateSelectedUi();
+        refreshManagerList();
+      }, 300);
+    };
+    searchInput.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        managerState.query = searchInput.value.trim();
+        managerState.page = 1;
+        refreshManagerList();
+      }
+    };
+
+    document.getElementById("tel-dl-sort").onchange = (e) => {
+      managerState.sort = e.target.value;
+      managerState.page = 1;
+      refreshManagerList();
+    };
+
+    managerState.selectAllEl.onclick = () => {
+      const rows = managerState.listEl.querySelectorAll('span[data-name]');
+      const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
+      for (const row of rows) {
+        const name = row.dataset.name;
+        if (!name) continue;
+        if (allOn) {
+          row.setChecked(false);
+          managerState.selected.delete(name);
+        } else {
+          row.setChecked(true);
+          managerState.selected.add(name);
+        }
+      }
+      updateSelectAllState();
+      updateSelectedUi();
+    };
+
+    managerState.delSelectedEl.onclick = async () => {
+      const names = [...managerState.selected];
+      if (!names.length) return;
+      const ok = window.confirm(
+        "确定删除选中的 " + names.length + " 个文件？\n\nNAS 上的文件也会被删除。"
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch("/dl/batch-delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({names}),
+        });
+        if (!res.ok) throw new Error(res.status);
+        managerState.selected.clear();
+        updateSelectedUi();
+        refreshManagerList();
+      } catch (e) {
+        managerState.delSelectedEl.style.background = "#8a8a8a";
+      }
+    };
   };
 
 const getVideoUrl = (video) =>

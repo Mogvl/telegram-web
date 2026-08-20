@@ -16,10 +16,12 @@
  *   the temp file is renamed to its final name (with a numeric suffix if
  *   the name is already taken).
  *
- *   GET  /health              -> {"ok":true,"dir":...}
- *   GET  /files               -> {"ok":true,"files":[{name,size,mtime,status}]}
- *   GET  /status              -> {"ok":true,"active":[{name,received,parts,bytes}]}
- *   DELETE /files/<name>      -> remove the file (and its temp .part) from the NAS
+ *   GET    /health                        -> {"ok":true,"dir":...}
+ *   GET    /files[?page=&pageSize=&q=&sort=] -> {"ok":true,"files":[...],"total":N,"page":P,"pageSize":S}
+ *   GET    /files/<name>                  -> stream the file (inline, UTF-8 filename)
+ *   GET    /status                        -> {"ok":true,"active":[{name,received,parts,bytes}]}
+ *   DELETE /files/<name>                  -> remove the file (and its temp .part) from the NAS
+ *   POST   /batch-delete {"names":[...]}  -> remove several files at once
  *
  * No external dependencies — plain node:http.
  */
@@ -72,6 +74,53 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function parseQuery(search) {
+  const out = {};
+  for (const [k, v] of new URLSearchParams(search || '')) out[k] = v;
+  return out;
+}
+
+function readFiles() {
+  return fs.readdirSync(DOWNLOAD_DIR)
+    .filter((f) => !f.startsWith('.'))
+    .map((f) => {
+      const full = path.join(DOWNLOAD_DIR, f);
+      const st = fs.statSync(full);
+      return {
+        name: f,
+        size: st.size,
+        mtime: st.mtime.toISOString(),
+        status: (sessions.has(f) || fs.existsSync(path.join(DOWNLOAD_DIR, `.${f}.part`)))
+          ? 'active'
+          : 'done'
+      };
+    });
+}
+
+function deleteFileFromDisk(name) {
+  const target = path.join(DOWNLOAD_DIR, name);
+  const partPath = path.join(DOWNLOAD_DIR, `.${name}.part`);
+
+  const session = sessions.get(name);
+  if (session) {
+    sessions.delete(name);
+    session.stream.destroy();
+  }
+
+  const deleted = [];
+  for (const p of [target, partPath]) {
+    try {
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        deleted.push(path.basename(p));
+      }
+    } catch (err) {
+      return {error: String(err.message || err)};
+    }
+  }
+  return {deleted};
+}
+
 const server = http.createServer((req, res) => {
   const url = (req.url || '').split('?')[0];
 
@@ -79,29 +128,74 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {ok: true, dir: DOWNLOAD_DIR, sessions: sessions.size});
   }
 
-  // list downloaded files (final files only; .part leftovers listed as active)
+  // batch delete: {"names":["a.mp4","b.jpg"]}
+  if (req.method === 'POST' && url === '/batch-delete') {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      let names = [];
+      try {
+        names = JSON.parse(body || '{}').names || [];
+      } catch (e) {
+        return sendJson(res, 400, {ok: false, error: 'bad json'});
+      }
+      const deleted = [];
+      const notFound = [];
+      for (const raw of names) {
+        const name = cleanFileName(raw);
+        const result = deleteFileFromDisk(name);
+        if (result.error) return sendJson(res, 500, {ok: false, error: result.error});
+        if (result.deleted.length) deleted.push(name);
+        else notFound.push(name);
+      }
+      return sendJson(res, 200, {ok: true, deleted, notFound});
+    });
+    return;
+  }
+
+  // list downloaded files, with paging/search/sort:
+  //   GET /files?page=1&pageSize=20&q=query&sort=time|name|size
   if (req.method === 'GET' && url === '/files') {
+    const q = parseQuery(req.url.split('?')[1] || '');
+    const page = Math.max(1, parseInt(q.page || '1', 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(q.pageSize || '20', 10) || 20));
+    const query = (q.q || '').toLowerCase();
+    const sort = q.sort || 'time';
+
     let files;
     try {
-      files = fs.readdirSync(DOWNLOAD_DIR)
-        .filter((f) => !f.startsWith('.'))
-        .map((f) => {
-          const full = path.join(DOWNLOAD_DIR, f);
-          const st = fs.statSync(full);
-          return {
-            name: f,
-            size: st.size,
-            mtime: st.mtime.toISOString(),
-            status: (sessions.has(f) || fs.existsSync(path.join(DOWNLOAD_DIR, `.${f}.part`)))
-              ? 'active'
-              : 'done'
-          };
-        })
-        .sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+      files = readFiles();
     } catch (err) {
       return sendJson(res, 500, {ok: false, error: String(err.message || err)});
     }
-    return sendJson(res, 200, {ok: true, files});
+
+    if (query) files = files.filter((f) => f.name.toLowerCase().includes(query));
+    if (sort === 'name') files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    else if (sort === 'size') files.sort((a, b) => a.size - b.size);
+    else files.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+
+    const total = files.length;
+    const start = (page - 1) * pageSize;
+    const pageFiles = files.slice(start, start + pageSize);
+    return sendJson(res, 200, {ok: true, files: pageFiles, total, page, pageSize});
+  }
+
+  // stream a file back to the browser (inline preview / re-download):
+  //   GET /files/<name>
+  if (req.method === 'GET' && url.startsWith('/files/')) {
+    const name = cleanFileName(url.slice('/files/'.length));
+    const target = path.join(DOWNLOAD_DIR, name);
+    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+      return sendJson(res, 404, {ok: false, error: 'not found'});
+    }
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': fs.statSync(target).size,
+      'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'cache-control': 'no-store'
+    });
+    fs.createReadStream(target).pipe(res);
+    return;
   }
 
   // in-flight upload sessions (live progress)
@@ -121,31 +215,10 @@ const server = http.createServer((req, res) => {
   // delete a downloaded file from the NAS (also aborts an in-flight upload)
   if (req.method === 'DELETE' && url.startsWith('/files/')) {
     const name = cleanFileName(url.slice('/files/'.length));
-    const target = path.join(DOWNLOAD_DIR, name);
-    const partPath = path.join(DOWNLOAD_DIR, `.${name}.part`);
-
-    const session = sessions.get(name);
-    if (session) {
-      sessions.delete(name);
-      session.stream.destroy();
-    }
-
-    const deleted = [];
-    for (const p of [target, partPath]) {
-      try {
-        if (fs.existsSync(p)) {
-          fs.unlinkSync(p);
-          deleted.push(path.basename(p));
-        }
-      } catch (err) {
-        return sendJson(res, 500, {ok: false, error: String(err.message || err)});
-      }
-    }
-
-    if (!deleted.length) {
-      return sendJson(res, 404, {ok: false, error: 'not found'});
-    }
-    return sendJson(res, 200, {ok: true, deleted});
+    const result = deleteFileFromDisk(name);
+    if (result.error) return sendJson(res, 500, {ok: false, error: result.error});
+    if (!result.deleted.length) return sendJson(res, 404, {ok: false, error: 'not found'});
+    return sendJson(res, 200, {ok: true, deleted: result.deleted});
   }
 
   if (req.method === 'POST' && url === '/upload') {
@@ -182,9 +255,11 @@ const server = http.createServer((req, res) => {
           if (err) {
             return sendJson(res, 500, {ok: false, error: String(err.message || err)});
           }
-          let mtime;
+          let mtime, size;
           try {
-            mtime = fs.statSync(target).mtime.toISOString();
+            const st = fs.statSync(target);
+            mtime = st.mtime.toISOString();
+            size = st.size;
           } catch (e) {
             /* ignore */
           }
@@ -194,7 +269,7 @@ const server = http.createServer((req, res) => {
             filename: path.basename(target),
             path: target,
             parts: session.received,
-            size: fs.existsSync(target) ? fs.statSync(target).size : undefined,
+            size,
             mtime
           });
         });

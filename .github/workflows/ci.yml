@@ -47,6 +47,13 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      # Mirror the Docker image layout: merge public/ assets into dist and
+      # verify every CSS/HTML-referenced asset exists (fonts, icons, ...)
+      - name: Merge static assets & verify dist
+        run: |
+          node scripts/merge-public-to-dist.mjs
+          node scripts/check-dist-assets.mjs
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:

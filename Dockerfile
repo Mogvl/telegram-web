@@ -24,7 +24,9 @@ ARG TWEB_ORIGIN
 ENV TWEB_TITLE=$TWEB_TITLE TWEB_URL=$TWEB_URL TWEB_ORIGIN=$TWEB_ORIGIN
 
 # production build: typecheck + changelog + vite build + bundle check
-RUN pnpm run build
+RUN pnpm run build \
+    && node scripts/merge-public-to-dist.mjs \
+    && node scripts/check-dist-assets.mjs
 
 # ---------- runtime stage ----------
 FROM nginx:1.27-alpine

@@ -10,5 +10,4 @@ snapshot-server
 test-results
 playwright-report
 *.log
-.env
 ssh.json

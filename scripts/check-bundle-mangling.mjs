@@ -150,10 +150,26 @@ function makeOffsetToPosition(code) {
   };
 }
 
+// rolldown may still be flushing a chunk while we read it after `vite build`
+// returns — retry the ENOENT race instead of failing the CI build arbitrarily.
+function readFileWithRetry(filePath, retries = 5) {
+  let lastErr;
+  for(let i = 0; i < retries; ++i) {
+    try {
+      return fs.readFileSync(filePath, 'utf8');
+    } catch(err) {
+      lastErr = err;
+      if(err.code !== 'ENOENT') throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+  throw lastErr;
+}
+
 function checkChunk(dir, file) {
-  const code = fs.readFileSync(path.join(dir, file), 'utf8');
+  const code = readFileWithRetry(path.join(dir, file));
   const lines = code.split('\n');
-  const map = JSON.parse(fs.readFileSync(path.join(dir, file + '.map'), 'utf8'));
+  const map = JSON.parse(readFileWithRetry(path.join(dir, file + '.map')));
 
   // * how every source variable is spelled in this chunk: source|name -> spelling -> count
   const spellings = new Map();

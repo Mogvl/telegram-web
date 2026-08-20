@@ -69,7 +69,9 @@ jobs:
             dockerfile: Dockerfile
           - image-suffix: "-dl"
             context: server
-            dockerfile: Dockerfile
+            # build-push-action resolves `file` from the workspace root,
+            # not from the context dir
+            dockerfile: server/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@v4

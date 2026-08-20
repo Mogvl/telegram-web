@@ -6,3 +6,19 @@ services:
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped
+    depends_on:
+      - telegram-web-dl
+
+  # Receives media downloads from the web app and writes them into the
+  # NAS volume below. Media downloaded via the in-app download buttons in
+  # restricted channels lands in /<your NAS path>/telegram-web/downloads.
+  telegram-web-dl:
+    image: ghcr.io/mogvl/telegram-web-dl:latest
+    container_name: telegram-web-dl
+    environment:
+      - TZ=Asia/Shanghai
+      - DOWNLOAD_DIR=/data/downloads
+    volumes:
+      # ↑ CHANGE THIS to a real NAS path, e.g. /volume1/docker/telegram-web
+      - ./downloads:/data/downloads
+    restart: unless-stopped

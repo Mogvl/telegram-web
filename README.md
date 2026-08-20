@@ -16,6 +16,7 @@
 - 🔒 两步验证、登录设备管理、隐私设置、Passkey
 - 🤖 Bot 支持、Web App 支持、星币/星礼、Premium 特性
 - 👥 群组成员管理、管理员、权限、邀请链接、频道广告收入统计等
+- ⬇️ **受限频道媒体下载到 NAS**：禁止下载/禁止保存的频道里的图片、视频、GIF、语音消息、故事，均可一键下载，文件直接保存到 NAS 挂载目录（基于 [Telegram Media Downloader](https://github.com/Neet-Nestor/Telegram-Media-Downloader) GPLv3，保存逻辑改为 NAS 后端）
 
 > 说明：与所有官方 Web 客户端相同，「私密对话（Secret Chat）」不支持——这是 Telegram 官方 Web 版的平台限制。
 
@@ -24,7 +25,8 @@
 镜像由 GitHub Actions 自动构建并推送到 GHCR：
 
 ```
-ghcr.io/mogvl/telegram-web:latest
+ghcr.io/mogvl/telegram-web:latest      # Web 前端
+ghcr.io/mogvl/telegram-web-dl:latest   # NAS 下载接收服务
 ```
 
 ### 方式一：绿联 NAS Docker 应用（推荐）
@@ -44,6 +46,22 @@ services:
     ports: ["8080:80"]
     environment:
       - TZ=Asia/Shanghai
+    restart: unless-stopped
+    depends_on:
+      - telegram-web-dl
+
+  # 接收网页里的媒体下载并写入 NAS 卷
+  # 受限频道下载的图片/视频/语音/故事会保存到 <项目目录>/downloads/
+  # 如需指定 NAS 绝对路径，把下面 - ./downloads 改成例如：
+  #   - /volume1/docker/telegram-web:/data/downloads
+  telegram-web-dl:
+    image: ghcr.io/mogvl/telegram-web-dl:latest
+    container_name: telegram-web-dl
+    environment:
+      - TZ=Asia/Shanghai
+      - DOWNLOAD_DIR=/data/downloads
+    volumes:
+      - ./downloads:/data/downloads
     restart: unless-stopped
 ```
 

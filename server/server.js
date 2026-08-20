@@ -128,17 +128,29 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {ok: true, dir: DOWNLOAD_DIR, sessions: sessions.size});
   }
 
-  // batch delete: {"names":["a.mp4","b.jpg"]}
+  // batch delete: {"names":["a.mp4","b.jpg"]} or {"filter":"done"}
   if (req.method === 'POST' && url === '/batch-delete') {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
-      let names = [];
+      let payload = {};
       try {
-        names = JSON.parse(body || '{}').names || [];
+        payload = JSON.parse(body || '{}');
       } catch (e) {
         return sendJson(res, 400, {ok: false, error: 'bad json'});
       }
+
+      let names = payload.names || [];
+      if (payload.filter === 'done') {
+        try {
+          names = readFiles()
+            .filter((f) => !(sessions.has(f.name) || fs.existsSync(path.join(DOWNLOAD_DIR, `.${f.name}.part`))))
+            .map((f) => f.name);
+        } catch (err) {
+          return sendJson(res, 500, {ok: false, error: String(err.message || err)});
+        }
+      }
+
       const deleted = [];
       const notFound = [];
       for (const raw of names) {
@@ -153,14 +165,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // list downloaded files, with paging/search/sort:
-  //   GET /files?page=1&pageSize=20&q=query&sort=time|name|size
+  // list downloaded files, with paging/search/sort/filter:
+  //   GET /files?page=1&pageSize=20&q=query&sort=time|name|size&filter=all|done|active
   if (req.method === 'GET' && url === '/files') {
     const q = parseQuery(req.url.split('?')[1] || '');
     const page = Math.max(1, parseInt(q.page || '1', 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(q.pageSize || '20', 10) || 20));
     const query = (q.q || '').toLowerCase();
     const sort = q.sort || 'time';
+    const filter = q.filter || 'all';
 
     let files;
     try {
@@ -169,15 +182,19 @@ const server = http.createServer((req, res) => {
       return sendJson(res, 500, {ok: false, error: String(err.message || err)});
     }
 
+    const isActive = (f) => sessions.has(f.name) || fs.existsSync(path.join(DOWNLOAD_DIR, `.${f.name}.part`));
+    if (filter === 'done') files = files.filter((f) => !isActive(f));
+    else if (filter === 'active') files = files.filter(isActive);
     if (query) files = files.filter((f) => f.name.toLowerCase().includes(query));
     if (sort === 'name') files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     else if (sort === 'size') files.sort((a, b) => a.size - b.size);
     else files.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
 
     const total = files.length;
+    const totalSize = files.reduce((acc, f) => acc + (f.size || 0), 0);
     const start = (page - 1) * pageSize;
     const pageFiles = files.slice(start, start + pageSize);
-    return sendJson(res, 200, {ok: true, files: pageFiles, total, page, pageSize});
+    return sendJson(res, 200, {ok: true, files: pageFiles, total, totalSize, page, pageSize});
   }
 
   // stream a file back to the browser (inline preview / re-download):

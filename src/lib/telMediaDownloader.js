@@ -205,6 +205,8 @@
     pageSize: 20,
     sort: "time",
     query: "",
+    filter: "all",
+    dark: false,
     total: 0,
     selected: new Set(),
     pageInfoEl: null,
@@ -248,6 +250,15 @@
     return c;
   };
 
+  const typeIcon = (name) => {
+    const lower = name.toLowerCase();
+    if (/.(png|jpe?g|gif|webp|bmp|svg|heic)$/.test(lower)) return "\u{1F5BC}\uFE0F";
+    if (/.(mp4|mov|mkv|avi|webm|m4v|ts)$/.test(lower)) return "\u{1F3AC}";
+    if (/.(mp3|ogg|opus|m4a|wav|flac|amr)$/.test(lower)) return "\u{1F3B5}";
+    if (/.(zip|rar|7z|tar|gz)$/.test(lower)) return "\u{1F4E6}";
+    return "\u{1F4C4}";
+  };
+
   const safeName = (name) => name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   const updateSelectAllState = () => {
@@ -276,6 +287,7 @@
 
     let files = [];
     let total = 0;
+    let totalSize = 0;
     let active = [];
     const errFetch = (el, msg) => {
       el.innerHTML =
@@ -287,12 +299,14 @@
         "page=" + managerState.page +
         "&pageSize=" + managerState.pageSize +
         "&sort=" + managerState.sort +
+        "&filter=" + managerState.filter +
         (managerState.query ? "&q=" + encodeURIComponent(managerState.query) : "");
       const filesRes = await fetch("/dl/files?" + qs);
       if (!filesRes.ok) throw new Error(filesRes.status);
       const filesJson = await filesRes.json();
       files = filesJson.files || [];
       total = filesJson.total || 0;
+      totalSize = filesJson.totalSize || 0;
 
       const statusRes = await fetch("/dl/status");
       if (statusRes.ok) {
@@ -311,23 +325,36 @@
     const pages = Math.max(1, Math.ceil(total / managerState.pageSize));
 
     // stats line
-    let totalBytes = 0;
-    let doneCount = 0;
-    for (const f of files) {
-      totalBytes += f.size || 0;
-      if (f.status === "done" && !activeMap.has(f.name)) doneCount++;
-    }
     if (managerState.statsEl) {
       managerState.statsEl.innerText =
-        "共 " + total + " 个文件" + (totalBytes ? " · 本页 " + formatSize(totalBytes) : "");
+        "共 " + total + " 个文件" + (totalSize ? " · " + formatSize(totalSize) : "");
     }
+    const clearDoneEl = document.getElementById("tel-dl-clear-done");
+    if (clearDoneEl) {
+      clearDoneEl.disabled = managerState.filter !== "done" || total === 0;
+      clearDoneEl.style.opacity = clearDoneEl.disabled ? ".4" : "1";
+    }
+
+    const dark = managerState.dark;
+    const cs = {
+      border: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.08)",
+      meta: dark ? "#9a9a9a" : "#8a8a8a",
+      empty: dark ? "#8a8a8a" : "#8a8a8a",
+      checkBorder: dark ? "#7fb3d5" : "#6093B5",
+    };
 
     const renderRow = (file) => {
       const row = document.createElement("div");
       row.style.cssText =
-        "display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid rgba(0,0,0,.08);";
+        "display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid " + cs.border + ";"
+
+      const icon = document.createElement("span");
+      icon.style.cssText = "flex:none;font-size:1rem;";
+      icon.innerText = typeIcon(file.name);
+      row.appendChild(icon);
 
       const cb = makeCheckSpan();
+      cb.style.borderColor = cs.checkBorder;
       cb.dataset.name = file.name;
       cb.setChecked(managerState.selected.has(file.name));
       cb.onclick = () => {
@@ -351,7 +378,7 @@
         window.open("/dl/files/" + encodeURIComponent(file.name), "_blank");
       };
       const meta = document.createElement("div");
-      meta.style.cssText = "font-size:.7rem;color:#8a8a8a;";
+      meta.style.cssText = "font-size:.7rem;color:" + cs.meta + ";";
 
       const act = activeMap.get(file.name);
       if (act) {
@@ -382,7 +409,9 @@
         "border:none;background:#D16666;color:#fff;border-radius:50%;width:1.5rem;height:1.5rem;" +
         "cursor:pointer;font-size:.8rem;flex:none;";
       del.onclick = async () => {
-        const ok = window.confirm("确定删除 " + file.name + " ？\n\nNAS 上的文件也会被删除。");
+        const ok = window.confirm(
+          "确定删除 " + file.name + " [" + formatSize(file.size) + "] ？\n\nNAS 上的文件也会被删除。"
+        );
         if (!ok) return;
         try {
           const res = await fetch(
@@ -408,7 +437,7 @@
       }
     } else {
       const empty = document.createElement("div");
-      empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
+      empty.style.cssText = "padding:.8rem;color:" + cs.empty + ";text-align:center;font-size:.8rem;";
       empty.innerText = managerState.query
         ? "没有匹配「" + managerState.query + "」的文件"
         : "暂无下载（文件会出现在这里）";
@@ -455,6 +484,22 @@
     if (!container) return;
     if (document.getElementById("tel-dl-manager-toggle")) return;
 
+    managerState.dark = !!(document.querySelector("html").classList.contains("night") ||
+      document.querySelector("html").classList.contains("theme-dark"));
+
+    managerState.dark;
+    const isDark = managerState.dark;
+    const ui = {
+      panelBg: isDark ? "#1e1e1e" : "#fff",
+      panelText: isDark ? "#eee" : "#222",
+      cardBg: isDark ? "#262626" : "#f7f8f9",
+      cardBorder: isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)",
+      inputBg: isDark ? "#2c2c2c" : "#fff",
+      inputBorder: isDark ? "#444" : "#ddd",
+      inputText: isDark ? "#eee" : "#222",
+      delBg: "#D16666",
+    };
+
     const toggle = document.createElement("button");
     toggle.id = "tel-dl-manager-toggle";
     toggle.innerText = "NAS 下载中心";
@@ -479,8 +524,9 @@
     const panel = document.createElement("div");
     panel.id = "tel-dl-manager-panel";
     panel.style.cssText =
-      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:340px;max-height:60vh;" +
-      "overflow:hidden;background:#fff;color:#222;border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
+      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:340px;max-width:92vw;max-height:60vh;" +
+      "overflow:hidden;background:" + ui.panelBg + ";color:" + ui.panelText + ";" +
+      "border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
       "display:none;flex-direction:column;";
     panel.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .8rem;' +
@@ -490,16 +536,21 @@
       "<button id='tel-dl-refresh' title='刷新' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#8635;</button>" +
       "<button id='tel-dl-close' title='关闭' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#10005;</button>" +
       "</span></div>" +
-      '<div style="padding:.45rem .8rem;background:#f7f8f9;border-bottom:1px solid rgba(0,0,0,.06);display:flex;gap:.4rem;align-items:center;">' +
-      '<input id="tel-dl-search" placeholder="搜索文件名" style="flex:1;border:1px solid #ddd;border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;">' +
-      '<select id="tel-dl-sort" title="排序" style="border:1px solid #ddd;border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
+      '<div style="padding:.45rem .8rem;background:' + ui.cardBg + ';border-bottom:1px solid ' + ui.cardBorder + ';display:flex;gap:.4rem;align-items:center;">' +
+      '<input id="tel-dl-search" placeholder="搜索文件名" style="flex:1;min-width:0;border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;">' +
+      '<select id="tel-dl-filter" title="状态" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
+      "<option value='all'>全部</option><option value='done'>已完成</option><option value='active'>下载中</option>" +
+      "</select>" +
+      '<select id="tel-dl-sort" title="排序" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
       "<option value='time'>时间</option><option value='name'>名称</option><option value='size'>大小</option>" +
       "</select></div>" +
-      '<div style="padding:.3rem .8rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid rgba(0,0,0,.06);background:#fbfcfd;">' +
+      '<div style="padding:.3rem .8rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid ' + ui.cardBorder + ';background:' + ui.cardBg + ';">' +
       '<span id="tel-dl-stats" style="flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:.7rem;color:#8a8a8a;pointer-events:none;"></span>' +
       '<span id="tel-dl-select-all" title="全选本页" style="width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;user-select:none;background:#fff;line-height:1;"></span>' +
-      '<button id="tel-dl-del-selected" style="border:none;background:#D16666;color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
-      "删除选中</button></div>";
+      '<button id="tel-dl-del-selected" style="border:none;background:' + ui.delBg + ';color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
+      "删除选中</button>" +
+      '<button id="tel-dl-clear-done" title="一键删除所有已完成的文件" style="border:none;background:#8a8a8a;color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
+      "清空已完成</button></div>";
     const listWrap = document.createElement("div");
     listWrap.style.cssText = "overflow-y:auto;flex:1;";
     managerState.listEl = document.createElement("div");
@@ -518,6 +569,38 @@
     managerState.selectAllEl = document.getElementById("tel-dl-select-all");
     managerState.delSelectedEl = document.getElementById("tel-dl-del-selected");
     updateSelectedUi();
+
+    const clearDoneEl = document.getElementById("tel-dl-clear-done");
+    clearDoneEl.onclick = async () => {
+      const count = managerState.total;
+      if (!count) return;
+      const ok = window.confirm("确定删除所有已完成的文件（共 " + count + " 个）？\n\nNAS 上的文件也会被删除。");
+      if (!ok) return;
+      try {
+        const res = await fetch("/dl/batch-delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({filter: "done"}),
+        });
+        if (!res.ok) throw new Error(res.status);
+        managerState.selected.clear();
+        updateSelectedUi();
+        refreshManagerList();
+      } catch (e) {
+        clearDoneEl.style.background = "#D16666";
+      }
+    };
+
+    const filterSelect = document.getElementById("tel-dl-filter");
+    filterSelect.onchange = (e) => {
+      managerState.filter = (e && e.target && e.target.value) || managerState.filter;
+      managerState.page = 1;
+      managerState.selected.clear();
+      updateSelectedUi();
+      refreshManagerList();
+    };
+    // initialize clear-done state without re-fetching the list
+    managerState.filter = filterSelect.value || "all";
 
     document.getElementById("tel-dl-refresh").onclick = refreshManagerList;
     document.getElementById("tel-dl-close").onclick = () => toggle.click();

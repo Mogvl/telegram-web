@@ -49,7 +49,17 @@ const FILTERS: {[k: string]: any} = {
 
 async function listDialogs(): Promise<BatchDialog[]> {
   const managers = rootScope.managers;
-  const {dialogs} = await managers.dialogsStorage.getDialogs({limit: 500});
+  // fetch ALL dialogs (paginated), not just the first page
+  const pages: any[] = [];
+  let offset = 0;
+  const LIMIT = 200;
+  for(;;) {
+    const page = await managers.dialogsStorage.getDialogs({limit: LIMIT, offsetIndex: offset});
+    pages.push(...(page.dialogs || []));
+    offset += (page.dialogs || []).length;
+    if(page.isEnd || !page.dialogs || !page.dialogs.length) break;
+  }
+  const dialogs = pages;
   const out: BatchDialog[] = [];
 
   for(const d of dialogs) {

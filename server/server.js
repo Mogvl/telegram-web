@@ -54,7 +54,8 @@ function cleanFileName(raw) {
     /* keep as-is */
   }
   name = path.basename(name).replace(/[\x00-\x1f<>:"/\\|?*]/g, '_').trim();
-  return name || 'download';
+  if (!name || name === '.' || name === '..') name = 'download';
+  return name;
 }
 
 function finalName(dir, name) {
@@ -70,8 +71,13 @@ function finalName(dir, name) {
 }
 
 function sendJson(res, status, obj) {
-  res.writeHead(status, {'content-type': 'application/json; charset=utf-8'});
-  res.end(JSON.stringify(obj));
+  try {
+    if (res.destroyed || res.writableEnded) return; // client already gone
+    res.writeHead(status, {'content-type': 'application/json; charset=utf-8'});
+    res.end(JSON.stringify(obj));
+  } catch (e) {
+    /* socket closed while writing — nothing to do */
+  }
 }
 
 function parseQuery(search) {
@@ -83,6 +89,13 @@ function parseQuery(search) {
 function readFiles() {
   return fs.readdirSync(DOWNLOAD_DIR)
     .filter((f) => !f.startsWith('.'))
+    .filter((f) => {
+      try {
+        return fs.statSync(path.join(DOWNLOAD_DIR, f)).isFile();
+      } catch (e) {
+        return false;
+      }
+    })
     .map((f) => {
       const full = path.join(DOWNLOAD_DIR, f);
       const st = fs.statSync(full);
@@ -104,7 +117,13 @@ function deleteFileFromDisk(name) {
   const session = sessions.get(name);
   if (session) {
     sessions.delete(name);
-    session.stream.destroy();
+    session.cancelled = true;
+    if (session.req && !session.req.destroyed) session.req.destroy();
+    try {
+      session.stream.destroy();
+    } catch (e) {
+      /* already closed */
+    }
   }
 
   const deleted = [];
@@ -202,16 +221,28 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.startsWith('/files/')) {
     const name = cleanFileName(url.slice('/files/'.length));
     const target = path.join(DOWNLOAD_DIR, name);
-    if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+    let size;
+    try {
+      size = fs.statSync(target).size;
+    } catch (e) {
+      return sendJson(res, 404, {ok: false, error: 'not found'});
+    }
+    if (!fs.statSync(target).isFile()) {
       return sendJson(res, 404, {ok: false, error: 'not found'});
     }
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
-      'content-length': fs.statSync(target).size,
+      'content-length': size,
       'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
       'cache-control': 'no-store'
     });
-    fs.createReadStream(target).pipe(res);
+    const rs = fs.createReadStream(target);
+    rs.on('error', (err) => {
+      // file vanished/deleted mid-stream — never let this crash the process
+      if (!res.destroyed) res.destroy();
+    });
+    res.on('close', () => rs.destroy());
+    rs.pipe(res);
     return;
   }
 
@@ -224,7 +255,7 @@ const server = http.createServer((req, res) => {
       } catch (e) {
         /* temp file not flushed yet */
       }
-      return {name, received: s.received, parts: s.parts, bytes};
+      return {name, received: s.received, parts: s.parts, bytes, expectedBytes: s.expectedBytes || 0};
     });
     return sendJson(res, 200, {ok: true, active});
   }
@@ -242,20 +273,65 @@ const server = http.createServer((req, res) => {
     const fileName = cleanFileName(req.headers['x-filename']);
     const part = Number(req.headers['x-part'] || 0);
     const parts = Number(req.headers['x-parts'] || 1);
-    const isLast = part === parts - 1;
+    // streaming uploads signal the final part explicitly with X-Last: 1
+    // (the client may not know the total part count up front)
+    const isLast = req.headers['x-last'] === '1' ? true : part === parts - 1;
+    const expectedBytes = Number(req.headers['x-size'] || 0);
 
     let session = sessions.get(fileName);
-    if (!session) {
-      const tmpPath = path.join(DOWNLOAD_DIR, `.${fileName}.part`);
-      const stream = fs.createWriteStream(tmpPath, {flags: 'a'});
-      session = {tmpPath, stream, received: 0, parts};
-      sessions.set(fileName, session);
+    if (session && session.cancelled) {
+      // a delete killed this run; only a fresh part-0 run may resume
+      if (part !== 0) {
+        return sendJson(res, 410, {ok: false, complete: false, error: 'upload cancelled'});
+      }
+      session = null;
     }
-
-    session.stream.on('error', (err) => {
+    if (session && part === 0) {
+      // part 0 always starts a new run: drop any stale session/tmp so a
+      // retried or re-clicked download cannot append onto leftover bytes
       sessions.delete(fileName);
-      sendJson(res, 500, {ok: false, error: String(err.message || err)});
-    });
+      session.cancelled = true;
+      if (session.req && !session.req.destroyed) session.req.destroy();
+      try {
+        session.stream.destroy();
+      } catch (e) {
+        /* already closed */
+      }
+      session = null;
+    }
+    if (!session) {
+      if (part !== 0) {
+        // orphan continuation (server restarted / session was deleted):
+        // silently truncating would produce a corrupt file — fail loudly
+        return sendJson(res, 409, {ok: false, complete: false, error: 'missing upload session; start from part 0'});
+      }
+      const tmpPath = path.join(DOWNLOAD_DIR, `.${fileName}.part`);
+      // never follow a planted symlink / reuse stale bytes
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (e) {
+        /* not present */
+      }
+      const stream = fs.createWriteStream(tmpPath, {flags: 'a'});
+      session = {tmpPath, stream, received: 0, parts, expectedBytes: expectedBytes > 0 ? expectedBytes : 0, cancelled: false, req};
+      sessions.set(fileName, session);
+    } else if (expectedBytes > 0 && expectedBytes > (session.expectedBytes || 0)) {
+      session.expectedBytes = expectedBytes;
+    }
+    session.req = req;
+    if (!session._errorAttached) {
+      session._errorAttached = true;
+      session.stream.on('error', (err) => {
+        if (sessions.get(fileName) !== session) return; // a newer run owns the name
+        sessions.delete(fileName);
+        try {
+          fs.unlinkSync(session.tmpPath);
+        } catch (e) {
+          /* not present */
+        }
+        sendJson(res, 500, {ok: false, complete: false, error: String(err.message || err)});
+      });
+    }
 
     req.pipe(session.stream, {end: false});
     req.on('end', () => {
@@ -270,7 +346,7 @@ const server = http.createServer((req, res) => {
         const target = finalName(DOWNLOAD_DIR, fileName);
         fs.rename(session.tmpPath, target, (err) => {
           if (err) {
-            return sendJson(res, 500, {ok: false, error: String(err.message || err)});
+            return sendJson(res, 500, {ok: false, complete: false, error: String(err.message || err)});
           }
           let mtime, size;
           try {
@@ -293,9 +369,19 @@ const server = http.createServer((req, res) => {
       });
     });
     req.on('error', (err) => {
+      if (sessions.get(fileName) !== session) return; // a newer run owns the name
       sessions.delete(fileName);
-      session.stream.destroy();
-      sendJson(res, 500, {ok: false, error: String(err.message || err)});
+      try {
+        session.stream.destroy();
+      } catch (e) {
+        /* already closed */
+      }
+      try {
+        fs.unlinkSync(session.tmpPath);
+      } catch (e) {
+        /* not present */
+      }
+      sendJson(res, 500, {ok: false, complete: false, error: String(err.message || err)});
     });
     return;
   }

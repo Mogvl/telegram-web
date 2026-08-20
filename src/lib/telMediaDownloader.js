@@ -770,10 +770,10 @@ const getVideoUrl = (video) =>
       return;
     }
 
-    let _blobs = [];
     let _next_offset = 0;
     let _total_size = null;
     let _file_extension = "mp4";
+    let _part_index = 0;
 
     const videoId =
       (Math.random() + 1).toString(36).substring(2, 10) +
@@ -860,19 +860,18 @@ const getVideoUrl = (video) =>
           return res.blob();
         })
         .then((resBlob) => {
-          _blobs.push(resBlob);
-        })
-        .then(() => {
-          if (!_total_size) {
-            throw new Error("_total_size is NULL");
-          }
-
-          if (_next_offset < _total_size) {
-            fetchNextPart();
-          } else {
-            save();
-            completeProgress(videoId);
-          }
+          // stream: upload this part right away (X-Last marks the final one)
+          const isLast = _next_offset >= _total_size;
+          return postPartToNas(fileName, resBlob, isLast, _part_index++).then(
+            () => {
+              if (isLast) {
+                logger.info("Download finished", fileName);
+                completeProgress(videoId);
+              } else {
+                fetchNextPart();
+              }
+            }
+          );
         })
         .catch((reason) => {
           if (reason instanceof TypeError) {
@@ -885,39 +884,6 @@ const getVideoUrl = (video) =>
           }
           AbortProgress(videoId);
         });
-    };
-
-    const save = () => {
-      logger.info("Finish downloading blobs", fileName);
-      logger.info("Concatenating blobs and uploading to NAS...", fileName);
-
-      const uploadToNas = async () => {
-        const total = _blobs.length;
-        for (let i = 0; i < total; i++) {
-          const res = await fetch("/dl/upload", {
-            method: "POST",
-            headers: {
-              "X-Filename": encodeURIComponent(fileName),
-              "X-Part": i,
-              "X-Parts": total,
-            },
-            body: _blobs[i],
-          });
-          if (!res.ok) {
-            throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
-          }
-        }
-        logger.info(
-          "Uploaded " + total + " part(s) to NAS",
-          fileName
-        );
-        showNasToast(fileName + " 已保存到 NAS");
-      };
-
-      uploadToNas().catch((reason) => {
-        logger.error(reason, fileName);
-        AbortProgress(videoId);
-      });
     };
 
     fetchNextPart();
@@ -1450,28 +1416,35 @@ const getVideoUrl = (video) =>
 
 
   /* ============ NAS batch downloader ============ */
-  const uploadBlobToNas = async (fileName, blobs) => {
-    const total = blobs.length;
-    for (let i = 0; i < total; i++) {
-      const res = await fetch("/dl/upload", {
-        method: "POST",
-        headers: {
-          "X-Filename": encodeURIComponent(fileName),
-          "X-Part": i,
-          "X-Parts": total,
-        },
-        body: blobs[i],
-      });
+  // Upload one blob part; the server finalizes the file when X-Last is "1".
+  const postPartToNas = (fileName, blob, isLast, partIndex) =>
+    fetch("/dl/upload", {
+      method: "POST",
+      headers: {
+        "X-Filename": encodeURIComponent(fileName),
+        "X-Part": partIndex,
+        "X-Parts": 1,
+        "X-Last": isLast ? "1" : "0",
+      },
+      body: blob,
+    }).then((res) => {
       if (!res.ok) {
         throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
       }
+      return res.json();
+    });
+
+  const uploadBlobToNas = async (fileName, blobs) => {
+    const total = blobs.length;
+    for (let i = 0; i < total; i++) {
+      await postPartToNas(fileName, blobs[i], i === total - 1, i);
     }
   };
 
   const downloadUrlToNas = async (url, fileName, onProgress) => {
-    const parts = [];
     let offset = 0;
     let total = null;
+    let partIndex = 0;
     while (true) {
       const res = await fetch(url, {
         headers: {Range: "bytes=" + offset + "-"},
@@ -1479,20 +1452,22 @@ const getVideoUrl = (video) =>
       if (!res.ok) throw new Error("HTTP " + res.status);
       const cr = res.headers.get("Content-Range");
       if (!cr) {
+        // server does not support Range: fetch the whole file at once
         const blob = await res.blob();
-        parts.push(blob);
-        break;
+        await postPartToNas(fileName, blob, true, partIndex);
+        onProgress && onProgress(100);
+        return;
       }
       const m = cr.match(/bytes (\d+)-(\d+)\/(\d+)/);
       if (!m) throw new Error("bad content-range");
       total = +m[3];
       const blob = await res.blob();
-      parts.push(blob);
       offset = +m[2] + 1;
+      const isLast = offset >= total;
+      await postPartToNas(fileName, blob, isLast, partIndex++);
       onProgress && onProgress(Math.round((offset / total) * 100));
-      if (offset >= total) break;
+      if (isLast) return;
     }
-    await uploadBlobToNas(fileName, parts);
   };
 
   const batchState = {
@@ -1503,6 +1478,7 @@ const getVideoUrl = (video) =>
     filter: "all",
     format: "all",
     items: [],       // all fetched items (unfiltered)
+    lastMids: {},    // filter -> last fetched mid (for load-more pagination)
     selected: new Set(),
     downloading: false,
     query: "",
@@ -1570,14 +1546,16 @@ const getVideoUrl = (video) =>
       row.className = "tel-dl-row";
       row.style.cssText =
         "display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;cursor:pointer;margin:.1rem .4rem;";
-      row.onclick = () => {
+      row.onclick = async () => {
         batchState.view = "media";
         batchState.peer = d.peerId;
         batchState.dialogTitle = d.title;
-        batchState.items = [];
         batchState.selected.clear();
         batchState.filter = "all";
+        batchState.format = "all";
+        resetBatchMedia();
         renderBatchHeader();
+        await fetchBatchMedia(0);
         renderBatchMediaList();
       };
       const icon = document.createElement("span");
@@ -1605,46 +1583,48 @@ const getVideoUrl = (video) =>
     }
   };
 
-  const renderBatchMediaList = async () => {
-    const list = batchState.listEl;
-    if (!list) return;
+  // Fetch the next page (offsetId) for the current filter and MERGE into
+  // batchState.items (no reset — load-more keeps appending). Returns the
+  // number of new items, or -1 on error.
+  const fetchBatchMedia = async (offsetId) => {
     const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
     const peerId = batchState.peer;
-    if (!bridge || peerId === null) return;
+    if (!bridge || peerId === null) return -1;
 
-    list.innerHTML = '<div style="padding:1rem;text-align:center;color:#8a8a8a;font-size:.8rem;">加载媒体…</div>';
+    const filters = batchState.filter === "all"
+      ? ["video", "photo", "gif", "audio", "document"]
+      : [batchState.filter];
 
-    let items = [];
+    let fetched = [];
     try {
-      const qs = batchState.filter === "all"
-        ? [
-            {key: "video", label: "视频"},
-            {key: "photo", label: "图片"},
-            {key: "gif", label: "GIF"},
-            {key: "audio", label: "音频"},
-            {key: "document", label: "文件"},
-          ]
-        : [{key: batchState.filter, label: ""}];
-      for (const f of qs) {
-        const res = await bridge.searchMedia(peerId, f.key, 100, 0);
-        items = items.concat(res.items || []);
+      for (const key of filters) {
+        const res = await bridge.searchMedia(peerId, key, 100, offsetId || 0);
+        fetched = fetched.concat(res.items || []);
       }
     } catch (e) {
-      list.innerHTML =
-        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">加载媒体失败：' + e.message + "</div>";
-      return;
+      return -1;
     }
 
-    // dedupe by mid (overlapping searches)
-    const seen = new Set();
-    items = items.filter((it) => {
-      const k = it.mid;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    items.sort((a, b) => b.mid - a.mid);
-    batchState.items = items;
+    const have = new Set(batchState.items.map((it) => it.mid));
+    const fresh = fetched.filter((it) => !have.has(it.mid));
+    batchState.items = batchState.items.concat(fresh).sort((a, b) => b.mid - a.mid);
+    if (batchState.filter !== "all" && fresh.length) {
+      batchState.lastMids[batchState.filter] = fresh[fresh.length - 1].mid;
+    }
+    return fresh.length;
+  };
+
+  const resetBatchMedia = () => {
+    batchState.items = [];
+    batchState.lastMids = {};
+  };
+
+  // Render ONLY (no fetching) — formats filters apply here.
+  const renderBatchMediaList = () => {
+    const list = batchState.listEl;
+    if (!list) return;
+
+    let items = batchState.items;
 
     // fill the format dropdown with the extensions actually present
     if (batchState.formatEl) {
@@ -1687,6 +1667,11 @@ const getVideoUrl = (video) =>
       return;
     }
 
+    const dark = managerState.dark;
+    const cs = {
+      border: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.08)",
+    };
+
     for (const it of items) {
       const row = document.createElement("div");
       row.className = "tel-dl-row";
@@ -1694,8 +1679,8 @@ const getVideoUrl = (video) =>
         "display:flex;align-items:center;gap:.4rem;padding:.4rem .6rem;margin:.1rem .4rem;";
       const cb = document.createElement("span");
       cb.style.cssText =
-        "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
-        "display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;" +
+        "flex:none;width:1.05rem;height:1.05rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
+        "display:inline-flex;align-items:center;justify-content:center;font-size:.65rem;color:#fff;" +
         "user-select:none;background:#fff;line-height:1;";
       cb.setChecked = (on) => {
         cb.dataset.on = on ? "1" : "0";
@@ -1735,24 +1720,27 @@ const getVideoUrl = (video) =>
       row.appendChild(info);
       list.appendChild(row);
     }
-  };
 
-  const updateBatchFooter = () => {
-    const btn = document.getElementById("tel-batch-download");
-    if (!btn) return;
-    btn.disabled = batchState.selected.size === 0 || batchState.downloading;
-    btn.innerText = batchState.downloading
-      ? "下载中\u2026"
-      : "\u2B07 下载选中(" + batchState.selected.size + ")";
-    const sa = document.getElementById("tel-batch-select-all");
-    if (sa) {
-      const rows = batchState.listEl
-        ? batchState.listEl.querySelectorAll("span[data-on]")
-        : [];
-      const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
-      sa.dataset.on = allOn ? "1" : "0";
-      sa.style.background = allOn ? "#6093B5" : "#fff";
-      sa.textContent = allOn ? "\u2713" : "";
+    // load-more button (single-filter tabs; 'all' already merges 5 tabs)
+    if (batchState.filter !== "all") {
+      const moreBtn = document.createElement("button");
+      moreBtn.className = "tel-dl-btn";
+      moreBtn.style.cssText =
+        "display:block;margin:.6rem auto;background:#6093B5;color:#fff;padding:.35rem 1rem;font-size:.75rem;";
+      moreBtn.innerText = "加载更多";
+      moreBtn.onclick = async () => {
+        moreBtn.disabled = true;
+        moreBtn.innerText = "加载中…";
+        const offsetId = batchState.lastMids[batchState.filter] || 0;
+        const added = await fetchBatchMedia(offsetId);
+        if (added < 0) {
+          moreBtn.disabled = false;
+          moreBtn.innerText = "加载更多（失败，重试）";
+          return;
+        }
+        renderBatchMediaList();
+      };
+      list.appendChild(moreBtn);
     }
   };
 
@@ -1772,7 +1760,6 @@ const getVideoUrl = (video) =>
       try {
         await downloadUrlToNas(it.url, it.fileName);
         ok++;
-        showNasToast(it.fileName + " 已保存到 NAS");
       } catch (e) {
         failed++;
         logger.error("batch item failed: " + it.fileName + " " + (e && e.message), "batch");
@@ -1846,10 +1833,13 @@ const getVideoUrl = (video) =>
           ? "background:#fff;color:#6093B5;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.15);"
           : "background:rgba(255,255,255,.22);color:#fff;");
       t.innerText = label;
-      t.onclick = () => {
+      t.onclick = async () => {
         batchState.filter = key;
         batchState.selected.clear();
+        batchState.format = "all";
+        resetBatchMedia();
         renderBatchHeader();
+        await fetchBatchMedia(0);
         renderBatchMediaList();
       };
       tabs.appendChild(t);
@@ -1877,7 +1867,11 @@ const getVideoUrl = (video) =>
         if (batchState.view === "dialogs") renderBatchDialogList();
         else {
           renderBatchHeader();
-          renderBatchMediaList();
+          if (!batchState.items.length) {
+            fetchBatchMedia(0).then(() => renderBatchMediaList());
+          } else {
+            renderBatchMediaList();
+          }
         }
       }
     };

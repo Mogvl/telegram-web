@@ -129,6 +129,17 @@ export class Authorizer {
   }
 
   private sendPlainRequest(transport: MTTransport, requestArray: Uint8Array) {
+    if(!transport) {
+      // Defensive: chooseServer can return null when the build lacks MTProto
+      // transport config (e.g. .env missing during docker build). Fail as a
+      // network error instead of crashing with "Cannot read properties of
+      // null (reading 'send')".
+      return Promise.reject({
+        code: 406,
+        type: 'NETWORK_BAD_RESPONSE'
+      });
+    }
+
     const requestLength = requestArray.byteLength;
 
     const header = new TLSerialization();

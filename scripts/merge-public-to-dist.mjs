@@ -22,10 +22,17 @@ import path from 'node:path';
 const DIST = 'dist';
 const PUBLIC = 'public';
 const SKIP = new Set(['index.html', 'sw.js']);
+// Directories copied wholesale (recursive). assets/ has been there from the
+// start; changelogs/ is generated into public/ by `pnpm run generate-changelog`
+// (part of the build) and fetched by the app at runtime as changelogs/<lang>_<ver>.md —
+// without it the in-app changelog dialog silently 404s into the SPA fallback.
+const DIRS = new Set(['assets', 'changelogs']);
 
-// 1. assets/ tree (fonts, images, audio, tgs, ...)
-if (existsSync(path.join(PUBLIC, 'assets'))) {
-  cpSync(path.join(PUBLIC, 'assets'), path.join(DIST, 'assets'), {recursive: true});
+// 1. dirs/ tree (fonts, images, audio, tgs, changelogs, ...)
+for (const dir of DIRS) {
+  if (existsSync(path.join(PUBLIC, dir))) {
+    cpSync(path.join(PUBLIC, dir), path.join(DIST, dir), {recursive: true});
+  }
 }
 
 // 2. top-level static files (favicons, browserconfig, manifest, ...),

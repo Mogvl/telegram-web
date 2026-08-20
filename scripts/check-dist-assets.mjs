@@ -21,22 +21,54 @@ function walk(dir, out = []) {
 }
 
 const refs = new Set();
+const scanned = [];
 
-for (const file of walk(DIST).filter((f) => f.endsWith('.css') || f.endsWith('index.html'))) {
+// CSS url(...) — resolved relative to the css file's own directory, so the
+// check stays correct even if vite's assetsDir ever changes from ''.
+for (const file of walk(DIST).filter((f) => f.endsWith('.css'))) {
+  scanned.push(file);
+  const dir = path.dirname(file);
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(/url\(\s*([^)]*?)\s*\)/g)) {
     let u = m[1].trim().replace(/^["']|["']$/g, '');
     if (u.startsWith('data:') || u.startsWith('#') || u.startsWith('http')) continue;
-    if (u.startsWith('./')) u = u.slice(2);
     u = u.split('?')[0]; // strip cache-busting query (?em6boz)
-    refs.add(u);
+    if (u.startsWith('/')) {
+      refs.add(path.join(DIST, u));
+    } else {
+      refs.add(path.resolve(dir, u));
+    }
   }
 }
 
-const missing = [...refs].filter((u) => !existsSync(path.join(DIST, path.normalize(u))));
+// index.html src/href references (entry chunk, favicons, manifests, fonts, ...)
+for (const file of walk(DIST).filter((f) => f.endsWith('index.html') || f.endsWith('.webmanifest'))) {
+  scanned.push(file);
+  const dir = path.dirname(file);
+  const text = readFileSync(file, 'utf8');
+  const re = /(?:src|href)\s*=\s*["']([^"']+)["']/g;
+  let m;
+  while ((m = re.exec(text))) {
+    let u = m[1].trim();
+    if (u.startsWith('data:') || u.startsWith('#') || u.startsWith('http')
+        || u.startsWith('mailto:') || u.startsWith('tel:') || u.startsWith('blob:')) continue;
+    u = u.split('?')[0];
+    if (u.startsWith('/')) {
+      refs.add(path.join(DIST, u));
+    } else {
+      refs.add(path.resolve(dir, u));
+    }
+  }
+}
+
+const relToDist = (abs) => path.relative(DIST, abs).split(path.sep).join('/');
+const missing = [];
+for (const abs of refs) {
+  if (!existsSync(abs)) missing.push(relToDist(abs));
+}
 if (missing.length) {
   console.error(`Missing ${missing.length} build assets:`);
-  for (const m of missing) console.error('  ' + m);
+  for (const m of missing.sort()) console.error('  ' + m);
   process.exit(1);
 }
-console.log(`OK: ${refs.size} referenced assets present in ${DIST}/`);
+console.log(`OK: ${refs.size} referenced assets present in ${DIST}/ (scanned ${scanned.length} css/html/manifest files)`);

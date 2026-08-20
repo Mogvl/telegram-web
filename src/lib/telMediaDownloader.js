@@ -165,7 +165,17 @@
     progressBar.querySelector("div").style.width = "100%";
   };
 
-  const getVideoUrl = (video) =>
+  const nasErrorHint = (status) => {
+    if (status === 404) {
+      return "NAS download channel missing: update the image (ghcr.io/mogvl/telegram-web:latest) and deploy the compose file with BOTH services (telegram-web + telegram-web-dl)";
+    }
+    if (status === 502) {
+      return "NAS download service is down: make sure the telegram-web-dl container is running";
+    }
+    return "NAS download failed (" + status + ") - check the deployment";
+  };
+
+const getVideoUrl = (video) =>
     video?.src ||
     video?.currentSrc ||
     video?.querySelector("source")?.src ||
@@ -308,9 +318,7 @@
             body: _blobs[i],
           });
           if (!res.ok) {
-            throw new Error(
-              "NAS upload failed: " + res.status + " " + (await res.text())
-            );
+            throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
           }
         }
         logger.info(
@@ -425,9 +433,7 @@
             body: _blobs[i],
           });
           if (!res.ok) {
-            throw new Error(
-              "NAS upload failed: " + res.status + " " + (await res.text())
-            );
+            throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
           }
         }
         logger.info(
@@ -464,7 +470,7 @@
         body: blob,
       });
       if (!up.ok) {
-        throw new Error("NAS upload failed: " + up.status);
+        throw new Error(nasErrorHint(up.status) + " (" + up.status + ")");
       }
       logger.info("NAS download triggered", fileName);
     };
@@ -743,23 +749,29 @@
     );
     if (!mediaAspecter || !mediaButtons) return;
 
-    // Query hidden buttons and unhide them
+    // Only unhide the forward button; the official download button (when
+    // present) is left untouched. Our own NAS download button is added
+    // unconditionally below, so downloads always go to the NAS volume.
     const hiddenButtons = mediaButtons.querySelectorAll("button.btn-icon.hide");
-    let onDownload = null;
     for (const btn of hiddenButtons) {
-      btn.classList.remove("hide");
       if (btn.textContent === FORWARD_ICON) {
+        btn.classList.remove("hide");
         btn.classList.add("tgico-forward");
       }
-      if (btn.textContent === DOWNLOAD_ICON) {
-        btn.classList.add("tgico-download");
-        // Use official download buttons
-        onDownload = () => {
-          btn.click();
-        };
-        logger.info("onDownload", onDownload);
-      }
     }
+
+    // Skip if our NAS download button is already there for this media.
+    if (mediaButtons.querySelector("button.btn-icon.tel-download")) return;
+
+    const makeNasButton = () => {
+      const downloadButton = document.createElement("button");
+      downloadButton.className = "btn-icon tgico-download tel-download";
+      downloadButton.innerHTML = `<span class="tgico button-icon">${DOWNLOAD_ICON}</span>`;
+      downloadButton.setAttribute("type", "button");
+      downloadButton.setAttribute("title", "Download to NAS");
+      downloadButton.setAttribute("aria-label", "Download to NAS");
+      return downloadButton;
+    };
 
     if (mediaAspecter.querySelector(".ckin__player")) {
       // 1. Video player detected - Video and it has finished initial loading
@@ -769,70 +781,37 @@
       const controls = mediaAspecter.querySelector(
         ".default__controls.ckin__controls"
       );
-      if (controls && !controls.querySelector(".tel-download")) {
+      if (controls) {
         const brControls = controls.querySelector(
           ".bottom-controls .right-controls"
         );
         if (!brControls) return;
-        const downloadButton = document.createElement("button");
-        downloadButton.className =
-          "btn-icon default__button tgico-download tel-download";
-        downloadButton.innerHTML = `<span class="tgico">${DOWNLOAD_ICON}</span>`;
-        downloadButton.setAttribute("type", "button");
-        downloadButton.setAttribute("title", "Download");
-        downloadButton.setAttribute("aria-label", "Download");
-        if (onDownload) {
-          downloadButton.onclick = onDownload;
-        } else {
-          downloadButton.onclick = () => {
-            tel_download_video(mediaAspecter.querySelector("video").src);
-          };
-        }
+        const downloadButton = makeNasButton();
+        downloadButton.classList.add("default__button");
+        downloadButton.onclick = () => {
+          tel_download_video(getVideoUrl(mediaAspecter.querySelector("video")));
+        };
         brControls.prepend(downloadButton);
       }
-    } else if (
-      mediaAspecter.querySelector("video") &&
-      mediaAspecter.querySelector("video") &&
-      !mediaButtons.querySelector("button.btn-icon.tgico-download")
-    ) {
+    } else if (mediaAspecter.querySelector("video")) {
       // 2. Video HTML element detected, could be either GIF or unloaded video
       // container > video[src]
-      const downloadButton = document.createElement("button");
-      downloadButton.className = "btn-icon tgico-download tel-download";
-      downloadButton.innerHTML = `<span class="tgico button-icon">${DOWNLOAD_ICON}</span>`;
-      downloadButton.setAttribute("type", "button");
-      downloadButton.setAttribute("title", "Download");
-      downloadButton.setAttribute("aria-label", "Download");
-      if (onDownload) {
-        downloadButton.onclick = onDownload;
-      } else {
-        downloadButton.onclick = () => {
-          tel_download_video(mediaAspecter.querySelector("video").src);
-        };
-      }
+      const downloadButton = makeNasButton();
+      downloadButton.onclick = () => {
+        tel_download_video(getVideoUrl(mediaAspecter.querySelector("video")));
+      };
       mediaButtons.prepend(downloadButton);
-    } else if (!mediaButtons.querySelector("button.btn-icon.tgico-download")) {
-      // 3. Image without download button detected
+    } else {
+      // 3. Image
       // container > img.thumbnail
-      if (
-        !mediaAspecter.querySelector("img.thumbnail") ||
-        !mediaAspecter.querySelector("img.thumbnail").src
-      ) {
+      const img = mediaAspecter.querySelector("img.thumbnail");
+      if (!img || !img.src) {
         return;
       }
-      const downloadButton = document.createElement("button");
-      downloadButton.className = "btn-icon tgico-download tel-download";
-      downloadButton.innerHTML = `<span class="tgico button-icon">${DOWNLOAD_ICON}</span>`;
-      downloadButton.setAttribute("type", "button");
-      downloadButton.setAttribute("title", "Download");
-      downloadButton.setAttribute("aria-label", "Download");
-      if (onDownload) {
-        downloadButton.onclick = onDownload;
-      } else {
-        downloadButton.onclick = () => {
-          tel_download_image(mediaAspecter.querySelector("img.thumbnail").src);
-        };
-      }
+      const downloadButton = makeNasButton();
+      downloadButton.onclick = () => {
+        tel_download_image(img.src);
+      };
       mediaButtons.prepend(downloadButton);
     }
   }, REFRESH_DELAY);

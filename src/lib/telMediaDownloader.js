@@ -182,8 +182,8 @@
     const toast = document.createElement("div");
     toast.className = "tel-dl-toast";
     toast.style.cssText =
-      "background:#B6C649;color:#fff;font-size:.85rem;padding:.6rem 1rem;border-radius:2rem;" +
-      "margin-bottom:.4rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;gap:.5rem;align-items:center;";
+      "background:#B6C649;color:#fff;font-size:.85rem;padding:.6rem 1.1rem;" +
+      "margin-bottom:.4rem;box-shadow:0 4px 14px rgba(15,30,50,.25);display:flex;gap:.5rem;align-items:center;";
     toast.innerHTML =
       '<span style="font-weight:700;">&#10003; ' +
       message +
@@ -238,10 +238,11 @@
 
   const makeCheckSpan = () => {
     const c = document.createElement("span");
+    c.className = "tel-dl-check";
     c.style.cssText =
-      "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;" +
-      "cursor:pointer;display:inline-flex;align-items:center;justify-content:center;" +
-      "font-size:.7rem;color:#fff;user-select:none;background:#fff;line-height:1;";
+      "flex:none;width:1.05rem;height:1.05rem;border:1.5px solid #6093B5;" +
+      "display:inline-flex;align-items:center;justify-content:center;" +
+      "font-size:.65rem;color:#fff;background:#fff;";
     c.setChecked = (on) => {
       c.dataset.on = on ? "1" : "0";
       c.style.background = on ? "#6093B5" : "#fff";
@@ -345,8 +346,9 @@
 
     const renderRow = (file) => {
       const row = document.createElement("div");
+      row.className = "tel-dl-row";
       row.style.cssText =
-        "display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid " + cs.border + ";"
+        "display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;margin:.1rem .4rem;";
 
       const icon = document.createElement("span");
       icon.style.cssText = "flex:none;font-size:1rem;";
@@ -468,16 +470,62 @@
         updateSelectedUi();
         refreshManagerList();
       };
-      const style =
-        "border:none;background:#6093B5;color:#fff;border-radius:2rem;padding:.25rem .6rem;" +
-        "font-size:.75rem;cursor:pointer;";
-      prev.style.cssText = style + (prev.disabled ? "opacity:.4;cursor:default;" : "");
-      next.style.cssText = style + (next.disabled ? "opacity:.4;cursor:default;" : "");
+      prev.className = "tel-dl-btn";
+      next.className = "tel-dl-btn";
+      const bstyle = "background:#6093B5;color:#fff;padding:.3rem .7rem;font-size:.75rem;";
+      prev.style.cssText = bstyle + (prev.disabled ? "opacity:.4;cursor:default;" : "");
+      next.style.cssText = bstyle + (next.disabled ? "opacity:.4;cursor:default;" : "");
       managerState.pagerEl.appendChild(prev);
       managerState.pagerEl.appendChild(info);
       managerState.pagerEl.appendChild(next);
     }
   };
+
+
+  function injectStyles() {
+    if (document.getElementById("tel-dl-styles")) return;
+    const style = document.createElement("style");
+    style.id = "tel-dl-styles";
+    style.textContent = `
+      .tel-dl-fab{position:fixed;z-index:1600;border:0;border-radius:999px;font-weight:700;letter-spacing:.2px;
+        cursor:pointer;transition:transform .15s,box-shadow .15s,filter .15s;font-family:inherit;
+        box-shadow:0 6px 18px rgba(15,30,50,.28)}
+      .tel-dl-fab:hover{transform:translateY(-1px);filter:brightness(1.08)}
+      .tel-dl-fab:active{transform:translateY(0) scale(.96)}
+      .tel-dl-panel{overflow:hidden;border-radius:18px;
+        box-shadow:0 16px 44px rgba(15,30,50,.32),0 3px 12px rgba(15,30,50,.10);
+        border:1px solid rgba(120,160,190,.20);animation:telDlIn .18s ease-out}
+      @keyframes telDlIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+      .tel-dl-panel .tel-dl-header{background:linear-gradient(135deg,#74b6d8,#4b8fb8 55%,#4382a8);position:relative}
+      .tel-dl-panel .tel-dl-header::after{content:"";position:absolute;inset:0;pointer-events:none;
+        background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,0))}
+      .tel-dl-btn{border:0;border-radius:14px;font-weight:600;cursor:pointer;font-family:inherit;
+        transition:filter .15s,transform .06s,opacity .15s}
+      .tel-dl-btn:hover{filter:brightness(1.1)}
+      .tel-dl-btn:active{transform:scale(.96)}
+      .tel-dl-btn:disabled{opacity:.4;cursor:default;filter:none}
+      .tel-dl-row{transition:background .15s;border-radius:12px}
+      .tel-dl-row:hover{background:rgba(96,147,181,.12)}
+      .tel-dl-check{border-radius:7px;line-height:1;user-select:none;cursor:pointer;
+        transition:background .15s,border-color .15s,box-shadow .15s}
+      .tel-dl-check:hover{border-color:#7fb3d5;box-shadow:0 0 0 2px rgba(96,147,181,.18)}
+      .tel-dl-scroll::-webkit-scrollbar{width:6px;height:6px}
+      .tel-dl-scroll::-webkit-scrollbar-thumb{background:rgba(128,143,160,.35);border-radius:3px}
+      .tel-dl-scroll::-webkit-scrollbar-track{background:transparent}
+      .tel-dl-input{border-radius:999px;outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit}
+      .tel-dl-input:focus{border-color:#6093B5;box-shadow:0 0 0 2px rgba(96,147,181,.18)}
+      .tel-dl-chip{border:0;border-radius:999px;cursor:pointer;font-family:inherit;
+        transition:background .15s,color .15s}
+      .tel-dl-toast{border-radius:999px;font-weight:600;animation:telDlToast .25s ease-out;cursor:pointer}
+      @keyframes telDlToast{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
+      .tel-dl-panel.tel-dl-dark .tel-dl-card{background:#242830;border-color:rgba(255,255,255,.08)}
+      .tel-dl-panel.tel-dl-dark .tel-dl-row:hover{background:rgba(96,147,181,.16)}
+      .tel-dl-panel.tel-dl-light .tel-dl-card{background:#f4f7fa;border-color:rgba(20,40,60,.07)}
+    `;
+    document.head.appendChild(style);
+  }
+
+  injectStyles();
 
   const setupDownloadManager = () => {
     const container = document.getElementById("tel-downloader-progress-bar-container");
@@ -503,10 +551,9 @@
     const toggle = document.createElement("button");
     toggle.id = "tel-dl-manager-toggle";
     toggle.innerText = "NAS 下载中心";
+    toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      "position:fixed;right:1rem;bottom:5.5rem;z-index:1600;background:#6093B5;color:#fff;" +
-      "border:none;border-radius:2rem;padding:.5rem .9rem;font-size:.8rem;cursor:pointer;" +
-      "box-shadow:0 2px 8px rgba(0,0,0,.3);";
+      "right:1rem;bottom:5.5rem;background:#6093B5;color:#fff;padding:.55rem 1rem;font-size:.8rem;";
     toggle.onclick = () => {
       managerState.open = !managerState.open;
       const panel = document.getElementById("tel-dl-manager-panel");
@@ -523,35 +570,36 @@
 
     const panel = document.createElement("div");
     panel.id = "tel-dl-manager-panel";
+    panel.className = "tel-dl-panel " + (isDark ? "tel-dl-dark" : "tel-dl-light");
     panel.style.cssText =
       "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:340px;max-width:92vw;max-height:60vh;" +
-      "overflow:hidden;background:" + ui.panelBg + ";color:" + ui.panelText + ";" +
-      "border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
+      "background:" + ui.panelBg + ";color:" + ui.panelText + ";" +
       "display:none;flex-direction:column;";
     panel.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .8rem;' +
-      'background:#6093B5;color:#fff;border-radius:1rem 1rem 0 0;">' +
+      '<div class="tel-dl-header" style="display:flex;align-items:center;justify-content:space-between;' +
+      'padding:.7rem .9rem;color:#fff;">' +
       "<span style='font-weight:700;font-size:.85rem;'>NAS 下载中心</span>" +
       "<span style='display:flex;gap:.4rem;'>" +
       "<button id='tel-dl-refresh' title='刷新' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#8635;</button>" +
       "<button id='tel-dl-close' title='关闭' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#10005;</button>" +
       "</span></div>" +
-      '<div style="padding:.45rem .8rem;background:' + ui.cardBg + ';border-bottom:1px solid ' + ui.cardBorder + ';display:flex;gap:.4rem;align-items:center;">' +
-      '<input id="tel-dl-search" placeholder="搜索文件名" style="flex:1;min-width:0;border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;">' +
-      '<select id="tel-dl-filter" title="状态" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
+      '<div class="tel-dl-card" style="padding:.45rem .8rem;border-bottom:1px solid ' + ui.cardBorder + ';display:flex;gap:.4rem;align-items:center;background:' + (isDark ? '#242830' : '#f4f7fa') + ';">' +
+      '<input id="tel-dl-search" placeholder="搜索文件名" class="tel-dl-input" style="flex:1;min-width:0;border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';padding:.35rem .7rem;font-size:.75rem;">' +
+      '<select id="tel-dl-filter" title="状态" class="tel-dl-input" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';padding:.3rem .4rem;font-size:.75rem;">' +
       "<option value='all'>全部</option><option value='done'>已完成</option><option value='active'>下载中</option>" +
       "</select>" +
-      '<select id="tel-dl-sort" title="排序" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';border-radius:2rem;padding:.3rem .4rem;font-size:.75rem;">' +
+      '<select id="tel-dl-sort" title="排序" class="tel-dl-input" style="border:1px solid ' + ui.inputBorder + ';background:' + ui.inputBg + ';color:' + ui.inputText + ';padding:.3rem .4rem;font-size:.75rem;">' +
       "<option value='time'>时间</option><option value='name'>名称</option><option value='size'>大小</option>" +
       "</select></div>" +
-      '<div style="padding:.3rem .8rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid ' + ui.cardBorder + ';background:' + ui.cardBg + ';">' +
+      '<div class="tel-dl-card" style="padding:.3rem .8rem;display:flex;align-items:center;gap:.5rem;border-bottom:1px solid ' + ui.cardBorder + ';background:' + (isDark ? '#242830' : '#f4f7fa') + ';">' +
       '<span id="tel-dl-stats" style="flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:.7rem;color:#8a8a8a;pointer-events:none;"></span>' +
       '<span id="tel-dl-select-all" title="全选本页" style="width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;user-select:none;background:#fff;line-height:1;"></span>' +
-      '<button id="tel-dl-del-selected" style="border:none;background:' + ui.delBg + ';color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
+      '<button id="tel-dl-del-selected" class="tel-dl-btn" style="background:#D16666;color:#fff;padding:.3rem .7rem;font-size:.7rem;" disabled>' +
       "删除选中</button>" +
-      '<button id="tel-dl-clear-done" title="一键删除所有已完成的文件" style="border:none;background:#8a8a8a;color:#fff;border-radius:2rem;padding:.25rem .6rem;font-size:.7rem;cursor:pointer;" disabled>' +
+      '<button id="tel-dl-clear-done" title="一键删除所有已完成的文件" class="tel-dl-btn" style="background:#8a8a8a;color:#fff;padding:.3rem .7rem;font-size:.7rem;" disabled>' +
       "清空已完成</button></div>";
     const listWrap = document.createElement("div");
+    listWrap.className = "tel-dl-scroll";
     listWrap.style.cssText = "overflow-y:auto;flex:1;";
     managerState.listEl = document.createElement("div");
     listWrap.appendChild(managerState.listEl);
@@ -698,9 +746,10 @@ const getVideoUrl = (video) =>
     const container = document.getElementById("tel-downloader-progress-bar-container");
     if (!container) return null;
     const toast = document.createElement("div");
+    toast.className = "tel-dl-toast";
     toast.style.cssText =
-      "background:#6093B5;color:#fff;font-size:.8rem;padding:.5rem .9rem;border-radius:2rem;" +
-      "margin-bottom:.4rem;display:flex;gap:.4rem;align-items:center;";
+      "background:#6093B5;color:#fff;font-size:.8rem;padding:.55rem 1rem;" +
+      "margin-bottom:.4rem;display:flex;gap:.4rem;align-items:center;box-shadow:0 4px 14px rgba(15,30,50,.25);";
     toast.innerText = "\u23F3 正在等待视频加载…";
     container.prepend(toast);
     const t = setTimeout(() => toast.remove(), 18000);
@@ -1477,9 +1526,10 @@ const getVideoUrl = (video) =>
     const c = document.getElementById("tel-downloader-progress-bar-container");
     if (!c) return;
     const t = document.createElement("div");
+    t.className = "tel-dl-toast";
     t.style.cssText =
-      "background:" + (color || "#6093B5") + ";color:#fff;font-size:.8rem;padding:.5rem .9rem;" +
-      "border-radius:2rem;margin-bottom:.4rem;";
+      "background:" + (color || "#6093B5") + ";color:#fff;font-size:.8rem;padding:.55rem 1rem;" +
+      "margin-bottom:.4rem;box-shadow:0 4px 14px rgba(15,30,50,.25);";
     t.innerText = msg;
     c.prepend(t);
     setTimeout(() => t.remove(), 5000);
@@ -1517,9 +1567,9 @@ const getVideoUrl = (video) =>
     }
     for (const d of filtered) {
       const row = document.createElement("div");
+      row.className = "tel-dl-row";
       row.style.cssText =
-        "display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;cursor:pointer;" +
-        "border-bottom:1px solid rgba(0,0,0,.06);";
+        "display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;cursor:pointer;margin:.1rem .4rem;";
       row.onclick = () => {
         batchState.view = "media";
         batchState.peer = d.peerId;
@@ -1639,9 +1689,9 @@ const getVideoUrl = (video) =>
 
     for (const it of items) {
       const row = document.createElement("div");
+      row.className = "tel-dl-row";
       row.style.cssText =
-        "display:flex;align-items:center;gap:.4rem;padding:.4rem .6rem;" +
-        "border-bottom:1px solid rgba(0,0,0,.06);";
+        "display:flex;align-items:center;gap:.4rem;padding:.4rem .6rem;margin:.1rem .4rem;";
       const cb = document.createElement("span");
       cb.style.cssText =
         "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
@@ -1789,11 +1839,12 @@ const getVideoUrl = (video) =>
     ];
     for (const [key, label] of tabDefs) {
       const t = document.createElement("button");
+      t.className = "tel-dl-chip";
       t.style.cssText =
-        "border:none;border-radius:2rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer;" +
+        "padding:.28rem .7rem;font-size:.72rem;" +
         (batchState.filter === key
-          ? "background:#fff;color:#6093B5;font-weight:700;"
-          : "background:rgba(255,255,255,.2);color:#fff;");
+          ? "background:#fff;color:#6093B5;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.15);"
+          : "background:rgba(255,255,255,.22);color:#fff;");
       t.innerText = label;
       t.onclick = () => {
         batchState.filter = key;
@@ -1814,10 +1865,9 @@ const getVideoUrl = (video) =>
     const toggle = document.createElement("button");
     toggle.id = "tel-batch-toggle";
     toggle.innerText = "批量下载";
+    toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      "position:fixed;right:1rem;bottom:8.8rem;z-index:1600;background:#B6C649;color:#fff;" +
-      "border:none;border-radius:2rem;padding:.5rem .9rem;font-size:.8rem;cursor:pointer;" +
-      "box-shadow:0 2px 8px rgba(0,0,0,.3);";
+      "right:1rem;bottom:8.8rem;background:#B6C649;color:#fff;padding:.55rem 1rem;font-size:.8rem;";
     toggle.onclick = () => {
       batchState.open = !batchState.open;
       const panel = batchEl();
@@ -1835,32 +1885,30 @@ const getVideoUrl = (video) =>
 
     const panel = document.createElement("div");
     panel.id = "tel-batch-panel";
+    panel.className = "tel-dl-panel " + (managerState.dark ? "tel-dl-dark" : "tel-dl-light");
     panel.style.cssText =
       "position:fixed;right:1rem;bottom:11.4rem;z-index:1600;width:340px;max-width:92vw;max-height:62vh;" +
-      "overflow:hidden;background:#fff;color:#222;border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
       "display:none;flex-direction:column;";
-    const isDark = managerState.dark;
-    panel.style.background = isDark ? "#1e1e1e" : "#fff";
-    panel.style.color = isDark ? "#eee" : "#222";
 
     const header = document.createElement("div");
-    header.className = "tel-batch-header";
+    header.className = "tel-batch-header tel-dl-header";
     header.style.cssText =
-      "display:flex;align-items:center;gap:.4rem;padding:.6rem .8rem;background:#6093B5;color:#fff;" +
-      "border-radius:1rem 1rem 0 0;flex-wrap:wrap;";
+      "display:flex;align-items:center;gap:.4rem;padding:.7rem .9rem;color:#fff;flex-wrap:wrap;";
     panel.appendChild(header);
 
     const searchWrap = document.createElement("div");
+    searchWrap.className = "tel-dl-card";
     searchWrap.style.cssText =
-      "padding:.45rem .8rem;background:" + (isDark ? "#262626" : "#f7f8f9") +
-      ";border-bottom:1px solid " + (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";";
+      "padding:.45rem .8rem;border-bottom:1px solid " + (managerState.dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") +
+      ";background:" + (managerState.dark ? "#242830" : "#f4f7fa") + ";";
     const search = document.createElement("input");
     search.id = "tel-batch-search";
     search.placeholder = "搜索对话名称";
+    search.className = "tel-dl-input";
     search.style.cssText =
-      "width:100%;box-sizing:border-box;border:1px solid " + (isDark ? "#444" : "#ddd") +
-      ";background:" + (isDark ? "#2c2c2c" : "#fff") + ";color:" + (isDark ? "#eee" : "#222") +
-      ";border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;outline:none;";
+      "width:100%;box-sizing:border-box;border:1px solid " + (managerState.dark ? "#444" : "#ddd") +
+      ";background:" + (managerState.dark ? "#2c2c2c" : "#fff") + ";color:" + (managerState.dark ? "#eee" : "#222") +
+      ";padding:.35rem .7rem;font-size:.75rem;";
     search.oninput = () => {
       batchState.query = search.value.trim();
       if (batchState.view === "dialogs") renderBatchDialogList();
@@ -1874,42 +1922,46 @@ const getVideoUrl = (video) =>
     // format filter bar (visible in media view)
     const formatBar = document.createElement("div");
     formatBar.id = "tel-batch-formatbar";
+    formatBar.className = "tel-dl-card";
     formatBar.style.cssText =
-      "display:none;align-items:center;gap:.4rem;padding:.4rem .8rem;background:" +
-      (isDark ? "#262626" : "#f7f8f9") + ";border-bottom:1px solid " +
-      (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";";
+      "display:none;align-items:center;gap:.4rem;padding:.4rem .8rem;" +
+      "border-bottom:1px solid " + (managerState.dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";" +
+      "background:" + (managerState.dark ? "#242830" : "#f4f7fa") + ";";
     const formatLabel = document.createElement("span");
     formatLabel.style.cssText = "font-size:.72rem;color:#8a8a8a;";
     formatLabel.innerText = "格式";
     const formatSelect = document.createElement("select");
     formatSelect.id = "tel-batch-format";
+    formatSelect.className = "tel-dl-input";
     formatSelect.style.cssText =
-      "flex:1;min-width:0;border:1px solid " + (isDark ? "#444" : "#ddd") +
-      ";background:" + (isDark ? "#2c2c2c" : "#fff") + ";color:" + (isDark ? "#eee" : "#222") +
-      ";border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;";
+      "flex:1;min-width:0;border:1px solid " + (managerState.dark ? "#444" : "#ddd") +
+      ";background:" + (managerState.dark ? "#2c2c2c" : "#fff") + ";color:" + (managerState.dark ? "#eee" : "#222") +
+      ";padding:.3rem .6rem;font-size:.75rem;";
     formatBar.appendChild(formatLabel);
     formatBar.appendChild(formatSelect);
     batchState.contentEl.appendChild(formatBar);
     batchState.formatEl = formatSelect;
 
     const listWrap = document.createElement("div");
+    listWrap.className = "tel-dl-scroll";
     listWrap.style.cssText = "overflow-y:auto;flex:1;min-height:0;";
     batchState.listEl = document.createElement("div");
     listWrap.appendChild(batchState.listEl);
     batchState.contentEl.appendChild(listWrap);
 
     const footer = document.createElement("div");
+    footer.className = "tel-dl-card";
     footer.style.cssText =
       "display:flex;align-items:center;gap:.4rem;padding:.45rem .8rem;border-top:1px solid " +
-      (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";" +
-      "background:" + (isDark ? "#262626" : "#fbfcfd") + ";";
+      (managerState.dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";" +
+      "background:" + (managerState.dark ? "#242830" : "#f4f7fa") + ";";
     const selAll = document.createElement("span");
     selAll.id = "tel-batch-select-all";
     selAll.title = "全选当前列表";
+    selAll.className = "tel-dl-check";
     selAll.style.cssText =
-      "flex:none;width:1rem;height:1rem;border:1.5px solid #6093B5;border-radius:.25rem;cursor:pointer;" +
-      "display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;" +
-      "user-select:none;background:#fff;line-height:1;";
+      "flex:none;width:1.05rem;height:1.05rem;border:1.5px solid #6093B5;" +
+      "display:inline-flex;align-items:center;justify-content:center;font-size:.65rem;color:#fff;background:#fff;";
     selAll.onclick = () => {
       const rows = batchState.listEl.querySelectorAll("span[data-on]");
       const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
@@ -1930,9 +1982,9 @@ const getVideoUrl = (video) =>
     };
     const dlBtn = document.createElement("button");
     dlBtn.id = "tel-batch-download";
+    dlBtn.className = "tel-dl-btn";
     dlBtn.style.cssText =
-      "flex:1;border:none;background:#B6C649;color:#fff;border-radius:2rem;padding:.35rem .8rem;" +
-      "font-size:.75rem;font-weight:700;cursor:pointer;";
+      "flex:1;background:#B6C649;color:#fff;padding:.4rem .9rem;font-size:.75rem;";
     dlBtn.disabled = true;
     footer.appendChild(selAll);
     footer.appendChild(dlBtn);

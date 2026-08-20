@@ -136,6 +136,7 @@
     const innerContainer = document.getElementById(
       "tel-downloader-progress-" + videoId
     );
+    if (!innerContainer) return; // closed by the user mid-download
     innerContainer.querySelector("p.filename").innerText = fileName;
     const progressBar = innerContainer.querySelector("div.progress");
     progressBar.querySelector("p").innerText = progress + "%";
@@ -143,18 +144,22 @@
   };
 
   const completeProgress = (videoId) => {
-    const progressBar = document
-      .getElementById("tel-downloader-progress-" + videoId)
-      .querySelector("div.progress");
+    const progressBarContainer = document.getElementById(
+      "tel-downloader-progress-" + videoId
+    );
+    if (!progressBarContainer) return; // closed by the user mid-download
+    const progressBar = progressBarContainer.querySelector("div.progress");
     progressBar.querySelector("p").innerText = "Completed";
     progressBar.querySelector("div").style.backgroundColor = "#B6C649";
     progressBar.querySelector("div").style.width = "100%";
   };
 
   const AbortProgress = (videoId) => {
-    const progressBar = document
-      .getElementById("tel-downloader-progress-" + videoId)
-      .querySelector("div.progress");
+    const progressBarContainer = document.getElementById(
+      "tel-downloader-progress-" + videoId
+    );
+    if (!progressBarContainer) return; // closed by the user mid-download
+    const progressBar = progressBarContainer.querySelector("div.progress");
     progressBar.querySelector("p").innerText = "Aborted";
     progressBar.querySelector("div").style.backgroundColor = "#D16666";
     progressBar.querySelector("div").style.width = "100%";
@@ -500,7 +505,7 @@
 
       const storyHeader =
         storiesContainer.querySelector(".GrsJNw3y") ||
-        storiesContainer.querySelector(".DropdownMenu").parentNode;
+        storiesContainer.querySelector(".DropdownMenu")?.parentNode;
       if (storyHeader && !storyHeader.querySelector(".tel-download")) {
         console.log("storyHeader");
         storyHeader.insertBefore(
@@ -535,7 +540,9 @@
     downloadButton.setAttribute("title", "Download");
     downloadButton.setAttribute("aria-label", "Download");
     if (videoPlayer) {
-      const videoUrl = videoPlayer.querySelector("video").currentSrc;
+      const video = videoPlayer.querySelector("video");
+      if (!video) return;
+      const videoUrl = video.currentSrc;
       downloadButton.setAttribute("data-tel-download-url", videoUrl);
       downloadButton.appendChild(downloadIcon);
       downloadButton.onclick = () => {
@@ -548,7 +555,7 @@
         const buttons = controls.querySelector(".buttons");
         if (!buttons.querySelector("button.tel-download")) {
           const spacer = buttons.querySelector(".spacer");
-          spacer.after(downloadButton);
+          spacer?.after(downloadButton);
         }
       }
 
@@ -642,6 +649,11 @@
         downloadButtonPinnedAudio.getAttribute("data-mid") !== dataMid &&
         audioElement.getAttribute("data-mid") === dataMid
       ) {
+        const link = audioElement.audio && audioElement.audio.getAttribute("src");
+        if (!link) {
+          return;
+        }
+        const isAudio = audioElement.audio instanceof HTMLAudioElement;
         downloadButtonPinnedAudio.onclick = (e) => {
           e.stopPropagation();
           if (isAudio) {
@@ -651,13 +663,9 @@
           }
         };
         downloadButtonPinnedAudio.setAttribute("data-mid", dataMid);
-        const link = audioElement.audio && audioElement.audio.getAttribute("src");
-        const isAudio = audioElement.audio && audioElement.audio instanceof HTMLAudioElement
-        if (link) {
-          pinnedAudio
-            .querySelector(".pinned-container-wrapper-utils")
-            ?.appendChild(downloadButtonPinnedAudio);
-        }
+        pinnedAudio
+          .querySelector(".pinned-container-wrapper-utils")
+          ?.appendChild(downloadButtonPinnedAudio);
       }
     });
 
@@ -746,6 +754,7 @@
         const brControls = controls.querySelector(
           ".bottom-controls .right-controls"
         );
+        if (!brControls) return;
         const downloadButton = document.createElement("button");
         downloadButton.className =
           "btn-icon default__button tgico-download tel-download";

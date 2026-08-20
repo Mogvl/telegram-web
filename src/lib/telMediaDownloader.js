@@ -837,5 +837,9 @@
     body.appendChild(container);
   })();
 
+  // Verification hook: check in a browser console with
+  //   window.__TEL_DOWNLOADER__
+  window.__TEL_DOWNLOADER__ = true;
+
   logger.info("Completed script setup.");
 })();

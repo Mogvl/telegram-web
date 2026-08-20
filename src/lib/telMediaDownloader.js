@@ -545,6 +545,22 @@
 
   injectStyles();
 
+  const isNarrowScreen = () => window.innerWidth < 640;
+
+  const fabPosition = (base) => {
+    // on narrow screens move the FABs up and enlarge them so the chat
+    // input bar never covers them; keep them above everything else
+    return (
+      "right:0.9rem;bottom:" +
+      (isNarrowScreen() ? base + 1.5 : base) +
+      "rem;padding:" +
+      (isNarrowScreen() ? "0.7rem 1.15rem" : "0.55rem 1rem") +
+      ";font-size:" +
+      (isNarrowScreen() ? "0.9rem" : "0.8rem") +
+      ";z-index:9999;"
+    );
+  };
+
   const setupDownloadManager = () => {
     const container = document.getElementById("tel-downloader-progress-bar-container");
     if (!container) return;
@@ -571,7 +587,7 @@
     toggle.innerText = "NAS 下载中心";
     toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      "right:1rem;bottom:5.5rem;background:#6093B5;color:#fff;padding:.55rem 1rem;font-size:.8rem;";
+      fabPosition(5.5) + "background:#6093B5;color:#fff;";
     toggle.onclick = () => {
       managerState.open = !managerState.open;
       const panel = document.getElementById("tel-dl-manager-panel");
@@ -590,7 +606,8 @@
     panel.id = "tel-dl-manager-panel";
     panel.className = "tel-dl-panel " + (isDark ? "tel-dl-dark" : "tel-dl-light");
     panel.style.cssText =
-      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:340px;max-width:92vw;max-height:60vh;" +
+      "position:fixed;right:0.9rem;bottom:" + (isNarrowScreen() ? "10.5rem" : "8.2rem") +
+      ";z-index:9999;width:340px;max-width:92vw;max-height:60vh;" +
       "background:" + ui.panelBg + ";color:" + ui.panelText + ";" +
       "display:none;flex-direction:column;";
     panel.innerHTML =
@@ -1568,7 +1585,7 @@ const getVideoUrl = (video) =>
     const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
     if (!bridge) {
       list.innerHTML =
-        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">批量下载桥接不可用（请确认已部署最新镜像）</div>';
+        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">桥接不可用：请先登录 Telegram 账号，并更新到最新镜像</div>';
       return;
     }
     // enumerate once per panel open, then filter client-side — re-running the
@@ -1594,7 +1611,7 @@ const getVideoUrl = (video) =>
     if (!filtered.length) {
       const empty = document.createElement("div");
       empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
-      empty.innerText = q ? "没有匹配的对话" : "暂无可下载的对话";
+      empty.innerText = q ? "没有匹配的对话" : "暂无可下载的对话（请先打开过至少一个会话）";
       list.appendChild(empty);
       return;
     }
@@ -1942,7 +1959,7 @@ const getVideoUrl = (video) =>
     toggle.innerText = "批量下载";
     toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      "right:1rem;bottom:8.8rem;background:#B6C649;color:#fff;padding:.55rem 1rem;font-size:.8rem;";
+      fabPosition(8.8) + "background:#B6C649;color:#fff;";
     toggle.onclick = () => {
       batchState.open = !batchState.open;
       const panel = batchEl();
@@ -1972,7 +1989,8 @@ const getVideoUrl = (video) =>
     panel.id = "tel-batch-panel";
     panel.className = "tel-dl-panel " + (managerState.dark ? "tel-dl-dark" : "tel-dl-light");
     panel.style.cssText =
-      "position:fixed;right:1rem;bottom:11.4rem;z-index:1600;width:340px;max-width:92vw;max-height:62vh;" +
+      "position:fixed;right:0.9rem;bottom:" + (isNarrowScreen() ? "13.6rem" : "11.4rem") +
+      ";z-index:9999;width:340px;max-width:92vw;max-height:62vh;" +
       "display:none;flex-direction:column;";
 
     const header = document.createElement("div");

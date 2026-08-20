@@ -37,10 +37,14 @@ const PORT = Number(process.env.PORT || 9090);
 
 // Clean up leftover temp files from interrupted runs.
 fs.mkdirSync(DOWNLOAD_DIR, {recursive: true});
-for (const f of fs.readdirSync(DOWNLOAD_DIR)) {
-  if (f.endsWith('.part')) {
-    fs.unlinkSync(path.join(DOWNLOAD_DIR, f));
+try {
+  for (const f of fs.readdirSync(DOWNLOAD_DIR)) {
+    if (f.endsWith('.part')) {
+      fs.unlinkSync(path.join(DOWNLOAD_DIR, f));
+    }
   }
+} catch (e) {
+  console.error('failed to clean stale .part files:', e.message);
 }
 
 /** Sessions in flight: fileName -> {tmpPath, stream, received, parts} */
@@ -274,8 +278,13 @@ const server = http.createServer((req, res) => {
     const part = Number(req.headers['x-part'] || 0);
     const parts = Number(req.headers['x-parts'] || 1);
     // streaming uploads signal the final part explicitly with X-Last: 1
-    // (the client may not know the total part count up front)
-    const isLast = req.headers['x-last'] === '1' ? true : part === parts - 1;
+    // (the client may not know the total part count up front). X-Last is
+    // authoritative whenever present — the legacy inference (part ===
+    // parts - 1) only applies to old single-part clients that never send
+    // it; otherwise a streaming client sending X-Parts: 1 + X-Last: 0
+    // would finalize its file on the very first part.
+    const hasLast = req.headers['x-last'] !== undefined;
+    const isLast = hasLast ? req.headers['x-last'] === '1' : part === parts - 1;
     const expectedBytes = Number(req.headers['x-size'] || 0);
 
     let session = sessions.get(fileName);
@@ -391,4 +400,13 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`telegram-web-dl listening on :${PORT}, dir=${DOWNLOAD_DIR}`);
+});
+
+// A stray per-request error (e.g. a client reset mid-response) must never
+// take down the whole sink and every in-flight transfer with it.
+process.on('uncaughtException', (err) => {
+  console.error('uncaughtException (continuing):', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('unhandledRejection (continuing):', err);
 });

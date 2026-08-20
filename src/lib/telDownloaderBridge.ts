@@ -22,6 +22,9 @@ import getDocumentURL from '@appManagers/utils/docs/getDocumentURL';
 import choosePhotoSize from '@appManagers/utils/photos/choosePhotoSize';
 import getPhotoDownloadOptions from '@appManagers/utils/photos/getPhotoDownloadOptions';
 import {getFileURL} from '@helpers/fileName';
+import getDialogIndex from '@appManagers/utils/dialogs/getDialogIndex';
+import getDialogIndexKey from '@appManagers/utils/dialogs/getDialogIndexKey';
+import {FOLDER_ID_ALL} from '@appManagers/constants';
 
 export type BatchDialog = {
   peerId: PeerId;
@@ -49,17 +52,38 @@ const FILTERS: {[k: string]: any} = {
 
 async function listDialogs(): Promise<BatchDialog[]> {
   const managers = rootScope.managers;
-  // fetch ALL dialogs (paginated), not just the first page
-  const pages: any[] = [];
-  let offset = 0;
+  // fetch ALL dialogs (paginated), not just the first page. getDialogs'
+  // `offsetIndex` is a dialog SORT INDEX (a large date-based value), NOT a
+  // page offset — the cursor for the next page is the previous page's last
+  // dialog index. Passing a count (0, 200, 400…) makes the storage scan past
+  // the end and return an empty page, silently truncating the list to the
+  // first ~200 dialogs.
+  const indexKey = getDialogIndexKey(FOLDER_ID_ALL);
+  const seen = new Set<number>();
+  const dialogs: any[] = [];
+  let offsetIndex = 0;
   const LIMIT = 200;
   for(;;) {
-    const page = await managers.dialogsStorage.getDialogs({limit: LIMIT, offsetIndex: offset});
-    pages.push(...(page.dialogs || []));
-    offset += (page.dialogs || []).length;
-    if(page.isEnd || !page.dialogs || !page.dialogs.length) break;
+    const page = await managers.dialogsStorage.getDialogs({limit: LIMIT, offsetIndex});
+    const pageDialogs: any[] = page.dialogs || [];
+    if(!pageDialogs.length) break;
+
+    let advanced = false;
+    for(const d of pageDialogs) {
+      if(seen.has(d.peerId)) continue;
+      seen.add(d.peerId);
+      dialogs.push(d);
+      advanced = true;
+    }
+    if(page.isEnd || !advanced) break;
+
+    const last = pageDialogs[pageDialogs.length - 1];
+    const lastIndex = getDialogIndex(last, indexKey);
+    // no cursor / no progress ⇒ already at the tail (or order changed) — stop
+    if(!lastIndex || (offsetIndex && lastIndex >= offsetIndex)) break;
+    offsetIndex = lastIndex;
   }
-  const dialogs = pages;
+
   const out: BatchDialog[] = [];
 
   for(const d of dialogs) {

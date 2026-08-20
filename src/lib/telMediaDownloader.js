@@ -324,6 +324,11 @@
     managerState.total = total;
     const activeMap = new Map(active.map((a) => [a.name, a]));
     const pages = Math.max(1, Math.ceil(total / managerState.pageSize));
+    // after deletes the current page can exceed the new page count — clamp
+    // so the user is not stranded on an empty page ("第 3/1 页")
+    if (managerState.page > pages) {
+      managerState.page = pages;
+    }
 
     // stats line
     if (managerState.statsEl) {
@@ -384,17 +389,30 @@
 
       const act = activeMap.get(file.name);
       if (act) {
-        const pct = act.parts ? Math.round(((act.received - 1) / act.parts) * 100) : 0;
+        // streaming uploads carry X-Parts: 1 and X-Size (expected size), so
+        // the old received/parts ratio was always ~100% after the 2nd part;
+        // prefer bytes/expectedBytes when the sink reports a target size.
+        let pct = null;
+        if (act.expectedBytes > 0 && act.bytes > 0) {
+          pct = Math.min(100, Math.round((act.bytes / act.expectedBytes) * 100));
+        } else if (act.parts > 1) {
+          pct = Math.round(((act.received - 1) / act.parts) * 100);
+        }
         meta.innerText =
-          "下载中 " + pct + "%（" + act.received + "/" + act.parts + " 段）";
-        const bar = document.createElement("div");
-        bar.style.cssText =
-          "height:.3rem;background:#e2e2e2;border-radius:2rem;margin-top:.25rem;overflow:hidden;";
-        const fill = document.createElement("div");
-        fill.style.cssText =
-          "height:100%;width:" + pct + "%;background:#6093B5;transition:width .5s;";
-        bar.appendChild(fill);
-        info.appendChild(bar);
+          "下载中 " +
+          (pct !== null
+            ? pct + "%（" + formatSize(act.bytes) + "）"
+            : formatSize(act.bytes));
+        if (pct !== null) {
+          const bar = document.createElement("div");
+          bar.style.cssText =
+            "height:.3rem;background:#e2e2e2;border-radius:2rem;margin-top:.25rem;overflow:hidden;";
+          const fill = document.createElement("div");
+          fill.style.cssText =
+            "height:100%;width:" + pct + "%;background:#6093B5;transition:width .5s;";
+          bar.appendChild(fill);
+          info.appendChild(bar);
+        }
       } else if (file.status === "active") {
         meta.innerText = "下载中（残留任务，可删除）";
       } else {
@@ -761,6 +779,11 @@ const getVideoUrl = (video) =>
     return close;
   };
 
+  // Guard against double-clicking the same media: two concurrent chains for
+  // one URL would interleave parts into the same NAS session and corrupt the
+  // final file.
+  const inFlightDownloads = new Set();
+
   const tel_download_video = (url) => {
     if (!url) {
       logger.error(
@@ -769,6 +792,12 @@ const getVideoUrl = (video) =>
       );
       return;
     }
+    if (inFlightDownloads.has(url)) {
+      logger.error("This media is already being downloaded", "download");
+      return;
+    }
+    inFlightDownloads.add(url);
+    const done = () => inFlightDownloads.delete(url);
 
     let _next_offset = 0;
     let _total_size = null;
@@ -801,14 +830,12 @@ const getVideoUrl = (video) =>
         headers: {
           Range: `bytes=${_next_offset}-`,
         },
-        "User-Agent":
-          "User-Agent Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/117.0",
       })
         .then((res) => {
           if (![200, 206].includes(res.status)) {
             throw new Error("Non 200/206 response was received: " + res.status);
           }
-          const mime = res.headers.get("Content-Type").split(";")[0];
+          const mime = (res.headers.get("Content-Type") || "").split(";")[0];
           if (!mime.startsWith("video/")) {
             throw new Error(
               "Get non video response with MIME type " +
@@ -820,9 +847,22 @@ const getVideoUrl = (video) =>
           fileName =
             fileName.substring(0, fileName.indexOf(".") + 1) + _file_extension;
 
-          const match = res.headers
-            .get("Content-Range")
-            .match(contentRangeRegex);
+          const contentRange = res.headers.get("Content-Range");
+          if (!contentRange) {
+            // server ignored Range (e.g. a proxy): fetch the whole file as
+            // a single part instead of failing on a null Content-Range
+            return res.blob().then((fullBlob) =>
+              postPartToNas(fileName, fullBlob, true, _part_index, null).then(
+                () => ({
+                  whole: true,
+                })
+              )
+            );
+          }
+          const match = contentRange.match(contentRangeRegex);
+          if (!match) {
+            throw new Error("Bad Content-Range header: " + contentRange);
+          }
 
           const startOffset = parseInt(match[1]);
           const endOffset = parseInt(match[2]);
@@ -832,11 +872,11 @@ const getVideoUrl = (video) =>
             logger.error("Gap detected between responses.", fileName);
             logger.info("Last offset: " + _next_offset, fileName);
             logger.info("New start offset " + match[1], fileName);
-            throw "Gap detected between responses.";
+            throw new Error("Gap detected between responses.");
           }
           if (_total_size && totalSize !== _total_size) {
             logger.error("Total size differs", fileName);
-            throw "Total size differs";
+            throw new Error("Total size differs");
           }
 
           _next_offset = endOffset + 1;
@@ -857,16 +897,23 @@ const getVideoUrl = (video) =>
             fileName,
             ((_next_offset * 100) / _total_size).toFixed(0)
           );
-          return res.blob();
+          return res.blob().then((b) => ({whole: false, blob: b}));
         })
-        .then((resBlob) => {
+        .then((part) => {
+          if (part.whole) {
+            logger.info("Download finished", fileName);
+            completeProgress(videoId);
+            done();
+            return;
+          }
           // stream: upload this part right away (X-Last marks the final one)
           const isLast = _next_offset >= _total_size;
-          return postPartToNas(fileName, resBlob, isLast, _part_index++).then(
+          return postPartToNas(fileName, part.blob, isLast, _part_index++, _total_size).then(
             () => {
               if (isLast) {
                 logger.info("Download finished", fileName);
                 completeProgress(videoId);
+                done();
               } else {
                 fetchNextPart();
               }
@@ -874,6 +921,7 @@ const getVideoUrl = (video) =>
           );
         })
         .catch((reason) => {
+          done();
           if (reason instanceof TypeError) {
             logger.error(
               "Video source unavailable (blob was released or network failed) - reopen the media viewer and try again",
@@ -891,9 +939,18 @@ const getVideoUrl = (video) =>
   };
 
   const tel_download_audio = (url) => {
-    let _blobs = [];
+    if (inFlightDownloads.has(url)) {
+      logger.error("This media is already being downloaded", "download");
+      return;
+    }
+    inFlightDownloads.add(url);
+    const done = () => inFlightDownloads.delete(url);
+
+    // stream: upload each Range part right away, like the video path — the
+    // old code buffered every blob in memory and only uploaded at the end
     let _next_offset = 0;
     let _total_size = null;
+    let _part_index = 0;
     const fileName = hashCode(url).toString(36) + ".ogg";
 
     const fetchNextPart = () => {
@@ -905,100 +962,78 @@ const getVideoUrl = (video) =>
       })
         .then((res) => {
           if (res.status !== 206 && res.status !== 200) {
-            logger.error(
-              "Non 200/206 response was received: " + res.status,
-              fileName
+            throw new Error("Non 200/206 response was received: " + res.status);
+          }
+
+          const mime = (res.headers.get("Content-Type") || "").split(";")[0];
+          if (!mime.startsWith("audio/")) {
+            throw new Error("Get non audio response with MIME type " + mime);
+          }
+
+          const contentRange = res.headers.get("Content-Range");
+          if (!contentRange) {
+            // server ignored Range (e.g. a proxy): whole file as one part
+            return res.blob().then((fullBlob) =>
+              postPartToNas(fileName, fullBlob, true, _part_index, null).then(
+                () => ({whole: true})
+              )
             );
+          }
+          const match = contentRange.match(contentRangeRegex);
+          if (!match) {
+            throw new Error("Bad Content-Range header: " + contentRange);
+          }
+
+          const startOffset = parseInt(match[1]);
+          const endOffset = parseInt(match[2]);
+          const totalSize = parseInt(match[3]);
+
+          if (startOffset !== _next_offset) {
+            logger.error("Gap detected between responses.", fileName);
+            logger.info("Last offset: " + _next_offset, fileName);
+            logger.info("New start offset " + match[1], fileName);
+            throw new Error("Gap detected between responses.");
+          }
+          if (_total_size && totalSize !== _total_size) {
+            logger.error("Total size differs", fileName);
+            throw new Error("Total size differs");
+          }
+
+          _next_offset = endOffset + 1;
+          _total_size = totalSize;
+
+          logger.info(
+            `Get response: ${res.headers.get(
+              "Content-Length"
+            )} bytes data from ${res.headers.get("Content-Range")}`,
+            fileName
+          );
+          return res.blob().then((b) => ({whole: false, blob: b}));
+        })
+        .then((part) => {
+          if (part.whole) {
+            logger.info("Download finished", fileName);
+            showNasToast(fileName + " 已保存到 NAS");
+            done();
             return;
           }
-
-          const mime = res.headers.get("Content-Type").split(";")[0];
-          if (!mime.startsWith("audio/")) {
-            logger.error(
-              "Get non audio response with MIME type " + mime,
-              fileName
-            );
-            throw "Get non audio response with MIME type " + mime;
-          }
-
-          try {
-            const match = res.headers
-              .get("Content-Range")
-              .match(contentRangeRegex);
-
-            const startOffset = parseInt(match[1]);
-            const endOffset = parseInt(match[2]);
-            const totalSize = parseInt(match[3]);
-
-            if (startOffset !== _next_offset) {
-              logger.error("Gap detected between responses.");
-              logger.info("Last offset: " + _next_offset);
-              logger.info("New start offset " + match[1]);
-              throw "Gap detected between responses.";
+          const isLast = _next_offset >= _total_size;
+          return postPartToNas(fileName, part.blob, isLast, _part_index++, _total_size).then(
+            () => {
+              if (isLast) {
+                logger.info("Download finished", fileName);
+                showNasToast(fileName + " 已保存到 NAS");
+                done();
+              } else {
+                fetchNextPart();
+              }
             }
-            if (_total_size && totalSize !== _total_size) {
-              logger.error("Total size differs");
-              throw "Total size differs";
-            }
-
-            _next_offset = endOffset + 1;
-            _total_size = totalSize;
-          } finally {
-            logger.info(
-              `Get response: ${res.headers.get(
-                "Content-Length"
-              )} bytes data from ${res.headers.get("Content-Range")}`
-            );
-            return res.blob();
-          }
-        })
-        .then((resBlob) => {
-          _blobs.push(resBlob);
-        })
-        .then(() => {
-          if (_next_offset < _total_size) {
-            fetchNextPart();
-          } else {
-            save();
-          }
+          );
         })
         .catch((reason) => {
+          done();
           logger.error(reason, fileName);
         });
-    };
-
-    const save = () => {
-      logger.info(
-        "Finish downloading blobs. Uploading to NAS...",
-        fileName
-      );
-
-      const uploadToNas = async () => {
-        const total = _blobs.length;
-        for (let i = 0; i < total; i++) {
-          const res = await fetch("/dl/upload", {
-            method: "POST",
-            headers: {
-              "X-Filename": encodeURIComponent(fileName),
-              "X-Part": i,
-              "X-Parts": total,
-            },
-            body: _blobs[i],
-          });
-          if (!res.ok) {
-            throw new Error(nasErrorHint(res.status) + " (" + res.status + ")");
-          }
-        }
-        logger.info(
-          "Uploaded " + total + " part(s) to NAS",
-          fileName
-        );
-        showNasToast(fileName + " 已保存到 NAS");
-      };
-
-      uploadToNas().catch((reason) => {
-        logger.error(reason, fileName);
-      });
     };
 
     fetchNextPart();
@@ -1417,15 +1452,22 @@ const getVideoUrl = (video) =>
 
   /* ============ NAS batch downloader ============ */
   // Upload one blob part; the server finalizes the file when X-Last is "1".
-  const postPartToNas = (fileName, blob, isLast, partIndex) =>
-    fetch("/dl/upload", {
+  const postPartToNas = (fileName, blob, isLast, partIndex, totalSize) => {
+    const headers = {
+      "X-Filename": encodeURIComponent(fileName),
+      "X-Part": partIndex,
+      "X-Parts": 1,
+      "X-Last": isLast ? "1" : "0",
+    };
+    // X-Size tells the sink the file's expected size so the download-center
+    // progress bar can show a real percentage for streaming uploads (where
+    // X-Parts is always 1).
+    if (totalSize !== undefined && totalSize !== null && totalSize > 0) {
+      headers["X-Size"] = String(totalSize);
+    }
+    return fetch("/dl/upload", {
       method: "POST",
-      headers: {
-        "X-Filename": encodeURIComponent(fileName),
-        "X-Part": partIndex,
-        "X-Parts": 1,
-        "X-Last": isLast ? "1" : "0",
-      },
+      headers,
       body: blob,
     }).then((res) => {
       if (!res.ok) {
@@ -1433,38 +1475,43 @@ const getVideoUrl = (video) =>
       }
       return res.json();
     });
-
-  const uploadBlobToNas = async (fileName, blobs) => {
-    const total = blobs.length;
-    for (let i = 0; i < total; i++) {
-      await postPartToNas(fileName, blobs[i], i === total - 1, i);
-    }
   };
 
-  const downloadUrlToNas = async (url, fileName, onProgress) => {
+  const downloadUrlToNas = async (url, fileName, onProgress, isCancelled) => {
     let offset = 0;
     let total = null;
     let partIndex = 0;
     while (true) {
+      if (isCancelled && isCancelled()) throw new Error("cancelled");
       const res = await fetch(url, {
         headers: {Range: "bytes=" + offset + "-"},
       });
+      if (res.status === 416 && offset === 0) {
+        // empty/missing source: record a 0-byte file instead of failing
+        await postPartToNas(fileName, new Blob([]), true, partIndex, 0);
+        onProgress && onProgress(100);
+        return;
+      }
       if (!res.ok) throw new Error("HTTP " + res.status);
       const cr = res.headers.get("Content-Range");
       if (!cr) {
         // server does not support Range: fetch the whole file at once
         const blob = await res.blob();
-        await postPartToNas(fileName, blob, true, partIndex);
+        await postPartToNas(fileName, blob, true, partIndex, null);
         onProgress && onProgress(100);
         return;
       }
       const m = cr.match(/bytes (\d+)-(\d+)\/(\d+)/);
       if (!m) throw new Error("bad content-range");
+      const start = +m[1];
+      if (start !== offset) throw new Error("range mismatch: server ignored offset");
       total = +m[3];
+      if (!Number.isFinite(total)) throw new Error("unknown total in content-range");
       const blob = await res.blob();
       offset = +m[2] + 1;
+      if (offset <= start) throw new Error("no progress from range response");
       const isLast = offset >= total;
-      await postPartToNas(fileName, blob, isLast, partIndex++);
+      await postPartToNas(fileName, blob, isLast, partIndex++, total);
       onProgress && onProgress(Math.round((offset / total) * 100));
       if (isLast) return;
     }
@@ -1478,7 +1525,11 @@ const getVideoUrl = (video) =>
     filter: "all",
     format: "all",
     items: [],       // all fetched items (unfiltered)
+    dialogs: null,   // cached dialog list (refreshed on panel open)
     lastMids: {},    // filter -> last fetched mid (for load-more pagination)
+    endReached: {},  // filter -> true once a page came back short/empty
+    renderSeq: 0,    // bumps on every view/tab switch to drop stale fetches
+    generation: 0,   // bumps when leaving the batch context to cancel downloads
     selected: new Set(),
     downloading: false,
     query: "",
@@ -1511,7 +1562,7 @@ const getVideoUrl = (video) =>
     setTimeout(() => t.remove(), 5000);
   };
 
-  const renderBatchDialogList = async () => {
+  const renderBatchDialogList = async (force) => {
     const list = batchState.listEl;
     if (!list) return;
     const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
@@ -1520,18 +1571,24 @@ const getVideoUrl = (video) =>
         '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">批量下载桥接不可用（请确认已部署最新镜像）</div>';
       return;
     }
-    let dialogs = [];
-    try {
-      dialogs = await bridge.listDialogs();
-    } catch (e) {
-      list.innerHTML =
-        '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">加载频道失败：' + e.message + "</div>";
-      return;
+    // enumerate once per panel open, then filter client-side — re-running the
+    // full paginated dialog walk on every keystroke is expensive and racy
+    if (!batchState.dialogs || force) {
+      const seq = ++batchState.renderSeq;
+      list.innerHTML = '<div style="padding:.8rem;color:#8a8a8a;font-size:.8rem;">加载对话…</div>';
+      try {
+        batchState.dialogs = await bridge.listDialogs();
+      } catch (e) {
+        list.innerHTML =
+          '<div style="padding:.8rem;color:#D16666;font-size:.8rem;">加载频道失败：' + e.message + "</div>";
+        return;
+      }
+      if (seq !== batchState.renderSeq) return; // a newer render superseded us
     }
     const q = batchState.query.toLowerCase();
     const filtered = q
-      ? dialogs.filter((d) => d.title.toLowerCase().includes(q))
-      : dialogs;
+      ? batchState.dialogs.filter((d) => d.title.toLowerCase().includes(q))
+      : batchState.dialogs;
 
     list.replaceChildren();
     if (!filtered.length) {
@@ -1553,10 +1610,12 @@ const getVideoUrl = (video) =>
         batchState.selected.clear();
         batchState.filter = "all";
         batchState.format = "all";
+        batchState.generation++; // cancel an in-flight batch download
         resetBatchMedia();
         renderBatchHeader();
+        const seq = batchState.renderSeq;
         await fetchBatchMedia(0);
-        renderBatchMediaList();
+        if (seq === batchState.renderSeq) renderBatchMediaList();
       };
       const icon = document.createElement("span");
       icon.style.cssText = "font-size:1.1rem;flex:none;";
@@ -1590,6 +1649,7 @@ const getVideoUrl = (video) =>
     const bridge = window.__TEL_DOWNLOADER_BRIDGE__;
     const peerId = batchState.peer;
     if (!bridge || peerId === null) return -1;
+    const seq = batchState.renderSeq;
 
     const filters = batchState.filter === "all"
       ? ["video", "photo", "gif", "audio", "document"]
@@ -1598,18 +1658,26 @@ const getVideoUrl = (video) =>
     let fetched = [];
     try {
       for (const key of filters) {
+        if (seq !== batchState.renderSeq) return -1; // superseded by a tab/view switch
         const res = await bridge.searchMedia(peerId, key, 100, offsetId || 0);
         fetched = fetched.concat(res.items || []);
       }
     } catch (e) {
       return -1;
     }
+    if (seq !== batchState.renderSeq) return -1;
 
     const have = new Set(batchState.items.map((it) => it.mid));
     const fresh = fetched.filter((it) => !have.has(it.mid));
     batchState.items = batchState.items.concat(fresh).sort((a, b) => b.mid - a.mid);
-    if (batchState.filter !== "all" && fresh.length) {
-      batchState.lastMids[batchState.filter] = fresh[fresh.length - 1].mid;
+    if (batchState.filter !== "all") {
+      // a page shorter than the limit (or empty) means we reached the tail
+      const perFilter = fetched.length;
+      if (!fresh.length || perFilter < 100) {
+        batchState.endReached[batchState.filter] = true;
+      } else if (fresh.length) {
+        batchState.lastMids[batchState.filter] = fresh[fresh.length - 1].mid;
+      }
     }
     return fresh.length;
   };
@@ -1617,6 +1685,8 @@ const getVideoUrl = (video) =>
   const resetBatchMedia = () => {
     batchState.items = [];
     batchState.lastMids = {};
+    batchState.endReached = {};
+    batchState.renderSeq++;
   };
 
   // Render ONLY (no fetching) — formats filters apply here.
@@ -1722,13 +1792,14 @@ const getVideoUrl = (video) =>
     }
 
     // load-more button (single-filter tabs; 'all' already merges 5 tabs)
-    if (batchState.filter !== "all") {
+    if (batchState.filter !== "all" && !batchState.endReached[batchState.filter]) {
       const moreBtn = document.createElement("button");
       moreBtn.className = "tel-dl-btn";
       moreBtn.style.cssText =
         "display:block;margin:.6rem auto;background:#6093B5;color:#fff;padding:.35rem 1rem;font-size:.75rem;";
       moreBtn.innerText = "加载更多";
       moreBtn.onclick = async () => {
+        if (batchState.downloading) return; // keep the current download predictable
         moreBtn.disabled = true;
         moreBtn.innerText = "加载中…";
         const offsetId = batchState.lastMids[batchState.filter] || 0;
@@ -1747,31 +1818,43 @@ const getVideoUrl = (video) =>
   const startBatchDownload = async () => {
     if (batchState.selected.size === 0 || batchState.downloading) return;
     batchState.downloading = true;
+    const generation = batchState.generation;
     updateBatchFooter();
     const targets = batchState.items.filter((it) => batchState.selected.has(it.mid));
     let ok = 0;
     let failed = 0;
+    const failedNames = [];
     for (let i = 0; i < targets.length; i++) {
+      if (generation !== batchState.generation) break; // user left the batch context
       const it = targets[i];
       batchToast(
         "\u2B07 批量下载 " + (i + 1) + "/" + targets.length + "：" + it.fileName,
         ok + failed ? "#B6C649" : "#6093B5"
       );
       try {
-        await downloadUrlToNas(it.url, it.fileName);
+        await downloadUrlToNas(it.url, it.fileName, null, () => generation !== batchState.generation);
         ok++;
       } catch (e) {
+        if (e && e.message === "cancelled") break;
         failed++;
+        failedNames.push(it.fileName);
         logger.error("batch item failed: " + it.fileName + " " + (e && e.message), "batch");
       }
     }
+    const cancelled = generation !== batchState.generation;
     batchState.downloading = false;
     batchState.selected.clear();
     updateBatchFooter();
-    batchToast(
-      "批量下载完成：成功 " + ok + (failed ? "，失败 " + failed : "") + " \u2713",
-      failed ? "#D16666" : "#B6C649"
-    );
+    if (cancelled) {
+      batchToast("批量下载已取消（已完成 " + ok + " 个）", "#D16666");
+    } else {
+      batchToast(
+        "批量下载完成：成功 " + ok +
+        (failed ? "，失败 " + failed + (failedNames.length ? "：" + failedNames.slice(0, 3).join("、") + (failedNames.length > 3 ? " 等" : "") : "") : "") +
+        " \u2713",
+        failed ? "#D16666" : "#B6C649"
+      );
+    }
   };
 
   const renderBatchHeader = () => {
@@ -1801,7 +1884,8 @@ const getVideoUrl = (video) =>
       batchState.view = "dialogs";
       batchState.peer = null;
       batchState.selected.clear();
-      batchState.items = [];
+      batchState.generation++; // cancel an in-flight batch download
+      resetBatchMedia();
       renderBatchHeader();
       renderBatchDialogList();
     };
@@ -1839,8 +1923,9 @@ const getVideoUrl = (video) =>
         batchState.format = "all";
         resetBatchMedia();
         renderBatchHeader();
+        const seq = batchState.renderSeq;
         await fetchBatchMedia(0);
-        renderBatchMediaList();
+        if (seq === batchState.renderSeq) renderBatchMediaList();
       };
       tabs.appendChild(t);
     }
@@ -1863,12 +1948,18 @@ const getVideoUrl = (video) =>
       const panel = batchEl();
       panel.style.display = batchState.open ? "flex" : "none";
       toggle.style.background = batchState.open ? "#D16666" : "#B6C649";
+      if (!batchState.open) {
+        batchState.generation++; // cancel any in-flight batch download
+      }
       if (batchState.open) {
-        if (batchState.view === "dialogs") renderBatchDialogList();
+        if (batchState.view === "dialogs") renderBatchDialogList(true);
         else {
           renderBatchHeader();
           if (!batchState.items.length) {
-            fetchBatchMedia(0).then(() => renderBatchMediaList());
+            const seq = batchState.renderSeq;
+            fetchBatchMedia(0).then(() => {
+              if (seq === batchState.renderSeq) renderBatchMediaList();
+            });
           } else {
             renderBatchMediaList();
           }

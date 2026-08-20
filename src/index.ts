@@ -63,6 +63,11 @@ import appNavigationController from '@components/appNavigationController';
 import {preventCrossTabDynamicImportDeadlock} from '@helpers/preventDeadlock';
 import appChatBackground from '@components/chat/bubbles/chatBackground';
 
+// NAS media downloader for restricted channels (saves media to the NAS
+// volume via /dl/upload, proxied to the telegram-web-dl companion service).
+// Third-party GPLv3 script, kept verbatim — see src/lib/telMediaDownloader.js.
+import './lib/telMediaDownloader';
+
 // import commonStateStorage from '@lib/commonStateStorage';
 // import { STATE_INIT } from '@config/state';
 

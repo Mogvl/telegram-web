@@ -656,7 +656,7 @@
         if (link) {
           pinnedAudio
             .querySelector(".pinned-container-wrapper-utils")
-            .appendChild(downloadButtonPinnedAudio);
+            ?.appendChild(downloadButtonPinnedAudio);
         }
       }
     });
@@ -812,6 +812,9 @@
   // Progress bar container setup
   (function setupProgressBar() {
     const body = document.querySelector("body");
+    if (!body) {
+      return; // module scripts run after DOM parse; guard anyway
+    }
     const container = document.createElement("div");
     container.id = "tel-downloader-progress-bar-container";
     container.style.position = "fixed";

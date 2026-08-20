@@ -1452,12 +1452,14 @@ const getVideoUrl = (video) =>
     peer: null,
     dialogTitle: "",
     filter: "all",
-    items: [],
+    format: "all",
+    items: [],       // all fetched items (unfiltered)
     selected: new Set(),
     downloading: false,
     query: "",
     listEl: null,
     contentEl: null,
+    formatEl: null,
   };
 
   const MEDIA_TAB_ICONS = {
@@ -1594,6 +1596,38 @@ const getVideoUrl = (video) =>
     items.sort((a, b) => b.mid - a.mid);
     batchState.items = items;
 
+    // fill the format dropdown with the extensions actually present
+    if (batchState.formatEl) {
+      const exts = new Set();
+      for (const it of items) {
+        const m = (it.fileName || "").match(/\.([a-zA-Z0-9]{2,5})$/);
+        if (m) exts.add(m[1].toLowerCase());
+      }
+      const sorted = [...exts].sort();
+      const cur = batchState.format;
+      batchState.formatEl.replaceChildren();
+      const optAll = document.createElement("option");
+      optAll.value = "all";
+      optAll.innerText = "全部格式";
+      batchState.formatEl.appendChild(optAll);
+      for (const e of sorted) {
+        const o = document.createElement("option");
+        o.value = e;
+        o.innerText = "." + e;
+        batchState.formatEl.appendChild(o);
+      }
+      batchState.formatEl.value = sorted.includes(cur) ? cur : "all";
+      batchState.format = batchState.formatEl.value;
+    }
+
+    // format filter (frontend only — all items already fetched)
+    if (batchState.format !== "all") {
+      items = items.filter((it) => {
+        const m = (it.fileName || "").match(/\.([a-zA-Z0-9]{2,5})$/);
+        return m && m[1].toLowerCase() === batchState.format;
+      });
+    }
+
     list.replaceChildren();
     if (!items.length) {
       const empty = document.createElement("div");
@@ -1619,6 +1653,7 @@ const getVideoUrl = (video) =>
         cb.textContent = on ? "\u2713" : "";
       };
       cb.setChecked(batchState.selected.has(it.mid));
+      cb.dataset.mid = "" + it.mid;
       cb.onclick = () => {
         const on = cb.dataset.on !== "1";
         cb.setChecked(on);
@@ -1638,7 +1673,11 @@ const getVideoUrl = (video) =>
       name.innerText = it.fileName;
       const meta = document.createElement("div");
       meta.style.cssText = "font-size:.68rem;color:#8a8a8a;";
-      meta.innerText = (it.size ? formatSize(it.size) : "") + (it.mime ? " " + it.mime : "");
+      const extMatch = (it.fileName || "").match(/\.([a-zA-Z0-9]{2,5})$/);
+      const badge = extMatch
+        ? '<span style="background:#6093B5;color:#fff;border-radius:2rem;padding:0 .35rem;margin-right:.3rem;font-size:.62rem;">.' + extMatch[1].toLowerCase() + "</span>"
+        : "";
+      meta.innerHTML = badge + (it.size ? formatSize(it.size) : "") + (it.mime ? " " + it.mime : "");
       info.appendChild(name);
       info.appendChild(meta);
       row.appendChild(cb);
@@ -1703,6 +1742,11 @@ const getVideoUrl = (video) =>
     if (!panel) return;
     const header = panel.querySelector(".tel-batch-header");
     if (!header) return;
+
+    const formatBar = document.getElementById("tel-batch-formatbar");
+    if (formatBar) {
+      formatBar.style.display = batchState.view === "media" ? "flex" : "none";
+    }
 
     if (batchState.view === "dialogs") {
       header.innerHTML =
@@ -1826,6 +1870,28 @@ const getVideoUrl = (video) =>
 
     batchState.contentEl = document.createElement("div");
     batchState.contentEl.style.cssText = "display:flex;flex-direction:column;flex:1;min-height:0;";
+
+    // format filter bar (visible in media view)
+    const formatBar = document.createElement("div");
+    formatBar.id = "tel-batch-formatbar";
+    formatBar.style.cssText =
+      "display:none;align-items:center;gap:.4rem;padding:.4rem .8rem;background:" +
+      (isDark ? "#262626" : "#f7f8f9") + ";border-bottom:1px solid " +
+      (isDark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)") + ";";
+    const formatLabel = document.createElement("span");
+    formatLabel.style.cssText = "font-size:.72rem;color:#8a8a8a;";
+    formatLabel.innerText = "格式";
+    const formatSelect = document.createElement("select");
+    formatSelect.id = "tel-batch-format";
+    formatSelect.style.cssText =
+      "flex:1;min-width:0;border:1px solid " + (isDark ? "#444" : "#ddd") +
+      ";background:" + (isDark ? "#2c2c2c" : "#fff") + ";color:" + (isDark ? "#eee" : "#222") +
+      ";border-radius:2rem;padding:.3rem .6rem;font-size:.75rem;";
+    formatBar.appendChild(formatLabel);
+    formatBar.appendChild(formatSelect);
+    batchState.contentEl.appendChild(formatBar);
+    batchState.formatEl = formatSelect;
+
     const listWrap = document.createElement("div");
     listWrap.style.cssText = "overflow-y:auto;flex:1;min-height:0;";
     batchState.listEl = document.createElement("div");
@@ -1847,15 +1913,18 @@ const getVideoUrl = (video) =>
     selAll.onclick = () => {
       const rows = batchState.listEl.querySelectorAll("span[data-on]");
       const allOn = rows.length > 0 && [...rows].every((r) => r.dataset.on === "1");
+      const mids = [];
       for (const r of rows) {
         const on = !allOn;
         r.dataset.on = on ? "1" : "0";
         r.style.background = on ? "#6093B5" : "#fff";
         r.textContent = on ? "\u2713" : "";
+        if (r.dataset.mid) mids.push(+r.dataset.mid);
       }
-      for (const it of batchState.items) {
-        if (allOn) batchState.selected.delete(it.mid);
-        else batchState.selected.add(it.mid);
+      // only the visible (format/tab-filtered) rows take part
+      for (const mid of mids) {
+        if (allOn) batchState.selected.delete(mid);
+        else batchState.selected.add(mid);
       }
       updateBatchFooter();
     };
@@ -1879,6 +1948,12 @@ const getVideoUrl = (video) =>
     document.body.appendChild(panel);
 
     document.getElementById("tel-batch-download").onclick = startBatchDownload;
+    formatSelect.onchange = () => {
+      batchState.format = formatSelect.value;
+      batchState.selected.clear();
+      updateBatchFooter();
+      renderBatchMediaList(); // re-render (filter is frontend-side)
+    };
     renderBatchHeader();
   };
 

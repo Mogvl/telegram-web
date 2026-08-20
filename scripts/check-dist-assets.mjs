@@ -66,6 +66,27 @@ const missing = [];
 for (const abs of refs) {
   if (!existsSync(abs)) missing.push(relToDist(abs));
 }
+
+// Runtime resources referenced by fixed names from JS (workers, sw, wasm,
+// changelogs) — not visible to the css/html scan above.
+const expectPresent = [
+  /^sw-.*\.js$/,          // service worker
+  /^.*\.worker-.*\.js$/,  // shared workers (crypto, mtproto, ...)
+  'decoderWorker.min.wasm',
+  'encoderWorker.min.wasm',
+  /^tlottie-.*\.wasm$/,
+  'assets/img/pattern.svg',
+];
+for (const pattern of expectPresent) {
+  const found = walk(DIST).some((f) =>
+    typeof pattern === 'string' ? f === path.join(DIST, pattern) : pattern.test(path.relative(DIST, f).split(path.sep).join('/'))
+  );
+  if (!found) missing.push(`expected runtime resource not found: ${pattern}`);
+}
+if (!walk(DIST).some((f) => /^changelogs\/.+\.md$/.test(path.relative(DIST, f).split(path.sep).join('/')))) {
+  missing.push('no changelogs/*.md present (in-app changelog dialog)');
+}
+
 if (missing.length) {
   console.error(`Missing ${missing.length} build assets:`);
   for (const m of missing.sort()) console.error('  ' + m);

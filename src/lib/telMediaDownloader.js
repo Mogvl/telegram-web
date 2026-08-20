@@ -165,7 +165,22 @@
     progressBar.querySelector("div").style.width = "100%";
   };
 
+  const getVideoUrl = (video) =>
+    video?.src ||
+    video?.currentSrc ||
+    video?.querySelector("source")?.src ||
+    video?.getAttribute("src") ||
+    "";
+
   const tel_download_video = (url) => {
+    if (!url) {
+      logger.error(
+        "Video source is empty — open the video (let it start loading) and try again",
+        "download"
+      );
+      return;
+    }
+
     let _blobs = [];
     let _next_offset = 0;
     let _total_size = null;
@@ -206,7 +221,11 @@
           }
           const mime = res.headers.get("Content-Type").split(";")[0];
           if (!mime.startsWith("video/")) {
-            throw new Error("Get non video response with MIME type " + mime);
+            throw new Error(
+              "Get non video response with MIME type " +
+                mime +
+                " (empty source or unavailable media; let the video play first)"
+            );
           }
           _file_extension = mime.split("/")[1];
           fileName =
@@ -542,11 +561,11 @@
     if (videoPlayer) {
       const video = videoPlayer.querySelector("video");
       if (!video) return;
-      const videoUrl = video.currentSrc;
+      const videoUrl = getVideoUrl(video);
       downloadButton.setAttribute("data-tel-download-url", videoUrl);
       downloadButton.appendChild(downloadIcon);
       downloadButton.onclick = () => {
-        tel_download_video(videoPlayer.querySelector("video").currentSrc);
+        tel_download_video(getVideoUrl(video));
       };
 
       // Add download button to video controls
@@ -575,7 +594,7 @@
         ) {
           // Update existing button
           telDownloadButton.onclick = () => {
-            tel_download_video(videoPlayer.querySelector("video").currentSrc);
+            tel_download_video(getVideoUrl(videoPlayer.querySelector("video")));
           };
           telDownloadButton.setAttribute("data-tel-download-url", videoUrl);
         }

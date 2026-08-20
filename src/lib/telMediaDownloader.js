@@ -679,6 +679,39 @@ const getVideoUrl = (video) =>
     video?.getAttribute("src") ||
     "";
 
+  const waitForVideoSource = (video, timeoutMs) => {
+    return new Promise((resolve) => {
+      const url = getVideoUrl(video);
+      if (url) return resolve(url);
+      const start = Date.now();
+      const iv = setInterval(() => {
+        const u = getVideoUrl(video);
+        if (u || Date.now() - start > (timeoutMs || 15000)) {
+          clearInterval(iv);
+          resolve(u);
+        }
+      }, 800);
+    });
+  };
+
+  const showWaitingToast = () => {
+    const container = document.getElementById("tel-downloader-progress-bar-container");
+    if (!container) return null;
+    const toast = document.createElement("div");
+    toast.style.cssText =
+      "background:#6093B5;color:#fff;font-size:.8rem;padding:.5rem .9rem;border-radius:2rem;" +
+      "margin-bottom:.4rem;display:flex;gap:.4rem;align-items:center;";
+    toast.innerText = "\u23F3 正在等待视频加载…";
+    container.prepend(toast);
+    const t = setTimeout(() => toast.remove(), 18000);
+    const close = () => {
+      clearTimeout(t);
+      toast.remove();
+    };
+    toast.onclick = close;
+    return close;
+  };
+
   const tel_download_video = (url) => {
     if (!url) {
       logger.error(
@@ -793,7 +826,14 @@ const getVideoUrl = (video) =>
           }
         })
         .catch((reason) => {
-          logger.error(reason, fileName);
+          if (reason instanceof TypeError) {
+            logger.error(
+              "Video source unavailable (blob was released or network failed) - reopen the media viewer and try again",
+              fileName
+            );
+          } else {
+            logger.error(reason, fileName);
+          }
           AbortProgress(videoId);
         });
     };
@@ -1288,8 +1328,20 @@ const getVideoUrl = (video) =>
         if (!brControls) return;
         const downloadButton = makeNasButton();
         downloadButton.classList.add("default__button");
-        downloadButton.onclick = () => {
-          tel_download_video(getVideoUrl(mediaAspecter.querySelector("video")));
+        downloadButton.onclick = async () => {
+          const video = mediaAspecter.querySelector("video");
+          if (!video) return;
+          const closeWait = showWaitingToast();
+          const url = await waitForVideoSource(video, 15000);
+          closeWait && closeWait();
+          if (!url) {
+            logger.error(
+              "Video source is empty — the video failed to load; reopen the media viewer and try again",
+              "download"
+            );
+            return;
+          }
+          tel_download_video(url);
         };
         brControls.prepend(downloadButton);
       }
@@ -1297,8 +1349,20 @@ const getVideoUrl = (video) =>
       // 2. Video HTML element detected, could be either GIF or unloaded video
       // container > video[src]
       const downloadButton = makeNasButton();
-      downloadButton.onclick = () => {
-        tel_download_video(getVideoUrl(mediaAspecter.querySelector("video")));
+      downloadButton.onclick = async () => {
+        const video = mediaAspecter.querySelector("video");
+        if (!video) return;
+        const closeWait = showWaitingToast();
+        const url = await waitForVideoSource(video, 15000);
+        closeWait && closeWait();
+        if (!url) {
+          logger.error(
+            "Video source is empty — the video failed to load; reopen the media viewer and try again",
+            "download"
+          );
+          return;
+        }
+        tel_download_video(url);
       };
       mediaButtons.prepend(downloadButton);
     } else {

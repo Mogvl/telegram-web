@@ -5,8 +5,12 @@
 // exactly — a boundary that predates every version we still support. Don't "fix" this
 // to max(s1, s2) length without a real caller that compares differing arities.
 export default function compareVersion(v1: string, v2: string): number {
-  v1 = v1.split(' ', 1)[0];
-  v2 = v2.split(' ', 1)[0];
+  // Guard against legacy/foreign stored state whose version field is
+  // missing (undefined) — loadState's VERSION migration compares it and
+  // used to crash the whole startup with a white screen. Treat missing
+  // versions as the oldest possible ("0") so the migration path runs.
+  v1 = (v1 || '0').split(' ', 1)[0];
+  v2 = (v2 || '0').split(' ', 1)[0];
   const s1 = v1.split('.');
   const s2 = v2.split('.');
 

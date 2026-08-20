@@ -175,6 +175,196 @@
     return "NAS download failed (" + status + ") - check the deployment";
   };
 
+
+  const showNasToast = (message) => {
+    const container = document.getElementById("tel-downloader-progress-bar-container");
+    if (!container) return;
+    const toast = document.createElement("div");
+    toast.className = "tel-dl-toast";
+    toast.style.cssText =
+      "background:#B6C649;color:#fff;font-size:.85rem;padding:.6rem 1rem;border-radius:2rem;" +
+      "margin-bottom:.4rem;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;gap:.5rem;align-items:center;";
+    toast.innerHTML =
+      '<span style="font-weight:700;">&#10003; ' +
+      message +
+      '</span><span style="opacity:.85;font-size:.75rem;">(点此打开下载中心)</span>';
+    toast.onclick = () => {
+      const btn = document.getElementById("tel-dl-manager-toggle");
+      if (btn) btn.click();
+    };
+    container.prepend(toast);
+    setTimeout(() => toast.remove(), 6000);
+  };
+
+  /* ============ NAS download manager ============ */
+  const managerState = {
+    open: false,
+    timer: null,
+    listEl: null,
+  };
+
+  const formatSize = (bytes) => {
+    if (bytes === undefined || bytes === null) return "";
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    let v = bytes;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return v.toFixed(i === 0 ? 0 : 1) + " " + units[i];
+  };
+
+  const formatTime = (iso) => {
+    try {
+      return new Date(iso).toLocaleString();
+    } catch (e) {
+      return "";
+    }
+  };
+
+  const refreshManagerList = async () => {
+    if (!managerState.open) return;
+    const listEl = managerState.listEl;
+    if (!listEl) return;
+
+    let files = [];
+    let active = [];
+    try {
+      const filesRes = await fetch("/dl/files");
+      if (filesRes.ok) {
+        files = (await filesRes.json()).files || [];
+      }
+      const statusRes = await fetch("/dl/status");
+      if (statusRes.ok) {
+        active = (await statusRes.json()).active || [];
+      }
+    } catch (e) {
+      listEl.innerHTML =
+        '<div style="padding:.6rem;color:#D16666;">下载中心暂时不可用（/dl/ 通道未部署）</div>';
+      return;
+    }
+
+    const activeMap = new Map(active.map((a) => [a.name, a]));
+
+    const renderRow = (file) => {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;gap:.5rem;padding:.5rem .6rem;border-bottom:1px solid rgba(0,0,0,.08);";
+      const info = document.createElement("div");
+      info.style.cssText = "flex:1;min-width:0;";
+      const name = document.createElement("div");
+      name.style.cssText =
+        "font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      name.title = file.name;
+      name.innerText = file.name;
+      const meta = document.createElement("div");
+      meta.style.cssText = "font-size:.7rem;color:#8a8a8a;";
+      const act = activeMap.get(file.name);
+      if (act) {
+        const pct = act.parts
+          ? Math.round(((act.received - 1) / act.parts) * 100)
+          : 0;
+        meta.innerText = "下载中 " + pct + "% (" + act.received + "/" + act.parts + " 段)";
+      } else if (file.status === "active") {
+        meta.innerText = "下载中（残留任务，可删除）";
+      } else {
+        meta.innerText = formatSize(file.size) + " · " + formatTime(file.mtime);
+      }
+      info.appendChild(name);
+      info.appendChild(meta);
+      row.appendChild(info);
+      const del = document.createElement("button");
+      del.innerText = "\u2715";
+      del.title = "删除（同时删除 NAS 上的文件）";
+      del.style.cssText =
+        "border:none;background:#D16666;color:#fff;border-radius:50%;width:1.5rem;height:1.5rem;" +
+        "cursor:pointer;font-size:.8rem;flex:none;";
+      del.onclick = async () => {
+        const ok = window.confirm("确定删除 " + file.name + " ？\n\nNAS 上的文件也会被删除。");
+        if (!ok) return;
+        try {
+          const res = await fetch(
+            "/dl/files/" + encodeURIComponent(file.name),
+            {method: "DELETE"}
+          );
+          if (!res.ok) throw new Error(res.status);
+          refreshManagerList();
+        } catch (e) {
+          del.style.background = "#8a8a8a";
+        }
+      };
+      row.appendChild(del);
+      return row;
+    };
+
+    listEl.replaceChildren();
+    if (files.length) {
+      for (const f of files) {
+        listEl.appendChild(renderRow(f));
+      }
+    } else {
+      const empty = document.createElement("div");
+      empty.style.cssText = "padding:.8rem;color:#8a8a8a;text-align:center;font-size:.8rem;";
+      empty.innerText = "暂无下载（文件会出现在这里）";
+      listEl.appendChild(empty);
+    }
+  };
+
+  const setupDownloadManager = () => {
+    const container = document.getElementById("tel-downloader-progress-bar-container");
+    if (!container) return;
+
+    if (document.getElementById("tel-dl-manager-toggle")) return;
+
+    const toggle = document.createElement("button");
+    toggle.id = "tel-dl-manager-toggle";
+    toggle.innerText = "NAS 下载中心";
+    toggle.style.cssText =
+      "position:fixed;right:1rem;bottom:5.5rem;z-index:1600;background:#6093B5;color:#fff;" +
+      "border:none;border-radius:2rem;padding:.5rem .9rem;font-size:.8rem;cursor:pointer;" +
+      "box-shadow:0 2px 8px rgba(0,0,0,.3);";
+    toggle.onclick = () => {
+      managerState.open = !managerState.open;
+      const panel = document.getElementById("tel-dl-manager-panel");
+      panel.style.display = managerState.open ? "block" : "none";
+      toggle.style.background = managerState.open ? "#B6C649" : "#6093B5";
+      if (managerState.open) {
+        refreshManagerList();
+        managerState.timer = setInterval(refreshManagerList, 3000);
+      } else {
+        clearInterval(managerState.timer);
+      }
+    };
+    document.body.appendChild(toggle);
+
+    const panel = document.createElement("div");
+    panel.id = "tel-dl-manager-panel";
+    panel.style.cssText =
+      "position:fixed;right:1rem;bottom:8.2rem;z-index:1600;width:320px;max-height:55vh;" +
+      "overflow:hidden;background:#fff;color:#222;border-radius:1rem;box-shadow:0 4px 20px rgba(0,0,0,.35);" +
+      "display:none;flex-direction:column;";
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .8rem;' +
+      'background:#6093B5;color:#fff;border-radius:1rem 1rem 0 0;">' +
+      "<span style='font-weight:700;font-size:.85rem;'>NAS 下载中心</span>" +
+      "<span style='display:flex;gap:.4rem;'>" +
+      "<button id='tel-dl-refresh' title='刷新' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#8635;</button>" +
+      "<button id='tel-dl-close' title='关闭' style='border:none;background:none;color:#fff;cursor:pointer;font-size:1rem;'>&#10005;</button>" +
+      "</span></div>" +
+      '<div style="padding:.5rem .8rem;font-size:.7rem;color:#8a8a8a;background:#f7f8f9;border-bottom:1px solid rgba(0,0,0,.06);">' +
+      "文件保存在 NAS 的 downloads 目录（telegram-web-dl 挂载卷）</div>";
+    const listWrap = document.createElement("div");
+    listWrap.style.cssText = "overflow-y:auto;";
+    managerState.listEl = document.createElement("div");
+    listWrap.appendChild(managerState.listEl);
+    panel.appendChild(listWrap);
+    document.body.appendChild(panel);
+
+    document.getElementById("tel-dl-refresh").onclick = refreshManagerList;
+    document.getElementById("tel-dl-close").onclick = () => toggle.click();
+  };
+
 const getVideoUrl = (video) =>
     video?.src ||
     video?.currentSrc ||
@@ -325,6 +515,7 @@ const getVideoUrl = (video) =>
           "Uploaded " + total + " part(s) to NAS",
           fileName
         );
+        showNasToast(fileName + " 已保存到 NAS");
       };
 
       uploadToNas().catch((reason) => {
@@ -440,6 +631,7 @@ const getVideoUrl = (video) =>
           "Uploaded " + total + " part(s) to NAS",
           fileName
         );
+        showNasToast(fileName + " 已保存到 NAS");
       };
 
       uploadToNas().catch((reason) => {
@@ -473,6 +665,7 @@ const getVideoUrl = (video) =>
         throw new Error(nasErrorHint(up.status) + " (" + up.status + ")");
       }
       logger.info("NAS download triggered", fileName);
+      showNasToast(fileName + " 已保存到 NAS");
     };
 
     uploadToNas().catch((reason) => {
@@ -834,6 +1027,8 @@ const getVideoUrl = (video) =>
     }
     body.appendChild(container);
   })();
+
+  setupDownloadManager();
 
   // Verification hook: check in a browser console with
   //   window.__TEL_DOWNLOADER__

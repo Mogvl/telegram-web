@@ -16,7 +16,10 @@
  *   the temp file is renamed to its final name (with a numeric suffix if
  *   the name is already taken).
  *
- *   GET /health  -> {"ok":true,"dir":"..."}
+ *   GET  /health              -> {"ok":true,"dir":...}
+ *   GET  /files               -> {"ok":true,"files":[{name,size,mtime,status}]}
+ *   GET  /status              -> {"ok":true,"active":[{name,received,parts,bytes}]}
+ *   DELETE /files/<name>      -> remove the file (and its temp .part) from the NAS
  *
  * No external dependencies — plain node:http.
  */
@@ -38,7 +41,7 @@ for (const f of fs.readdirSync(DOWNLOAD_DIR)) {
   }
 }
 
-/** Sessions in flight: fileName -> {tmpPath, stream, received} */
+/** Sessions in flight: fileName -> {tmpPath, stream, received, parts} */
 const sessions = new Map();
 
 function cleanFileName(raw) {
@@ -76,6 +79,75 @@ const server = http.createServer((req, res) => {
     return sendJson(res, 200, {ok: true, dir: DOWNLOAD_DIR, sessions: sessions.size});
   }
 
+  // list downloaded files (final files only; .part leftovers listed as active)
+  if (req.method === 'GET' && url === '/files') {
+    let files;
+    try {
+      files = fs.readdirSync(DOWNLOAD_DIR)
+        .filter((f) => !f.startsWith('.'))
+        .map((f) => {
+          const full = path.join(DOWNLOAD_DIR, f);
+          const st = fs.statSync(full);
+          return {
+            name: f,
+            size: st.size,
+            mtime: st.mtime.toISOString(),
+            status: (sessions.has(f) || fs.existsSync(path.join(DOWNLOAD_DIR, `.${f}.part`)))
+              ? 'active'
+              : 'done'
+          };
+        })
+        .sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+    } catch (err) {
+      return sendJson(res, 500, {ok: false, error: String(err.message || err)});
+    }
+    return sendJson(res, 200, {ok: true, files});
+  }
+
+  // in-flight upload sessions (live progress)
+  if (req.method === 'GET' && url === '/status') {
+    const active = [...sessions.entries()].map(([name, s]) => {
+      let bytes = 0;
+      try {
+        bytes = fs.statSync(s.tmpPath).size;
+      } catch (e) {
+        /* temp file not flushed yet */
+      }
+      return {name, received: s.received, parts: s.parts, bytes};
+    });
+    return sendJson(res, 200, {ok: true, active});
+  }
+
+  // delete a downloaded file from the NAS (also aborts an in-flight upload)
+  if (req.method === 'DELETE' && url.startsWith('/files/')) {
+    const name = cleanFileName(url.slice('/files/'.length));
+    const target = path.join(DOWNLOAD_DIR, name);
+    const partPath = path.join(DOWNLOAD_DIR, `.${name}.part`);
+
+    const session = sessions.get(name);
+    if (session) {
+      sessions.delete(name);
+      session.stream.destroy();
+    }
+
+    const deleted = [];
+    for (const p of [target, partPath]) {
+      try {
+        if (fs.existsSync(p)) {
+          fs.unlinkSync(p);
+          deleted.push(path.basename(p));
+        }
+      } catch (err) {
+        return sendJson(res, 500, {ok: false, error: String(err.message || err)});
+      }
+    }
+
+    if (!deleted.length) {
+      return sendJson(res, 404, {ok: false, error: 'not found'});
+    }
+    return sendJson(res, 200, {ok: true, deleted});
+  }
+
   if (req.method === 'POST' && url === '/upload') {
     const fileName = cleanFileName(req.headers['x-filename']);
     const part = Number(req.headers['x-part'] || 0);
@@ -86,7 +158,7 @@ const server = http.createServer((req, res) => {
     if (!session) {
       const tmpPath = path.join(DOWNLOAD_DIR, `.${fileName}.part`);
       const stream = fs.createWriteStream(tmpPath, {flags: 'a'});
-      session = {tmpPath, stream, received: 0};
+      session = {tmpPath, stream, received: 0, parts};
       sessions.set(fileName, session);
     }
 
@@ -110,12 +182,20 @@ const server = http.createServer((req, res) => {
           if (err) {
             return sendJson(res, 500, {ok: false, error: String(err.message || err)});
           }
+          let mtime;
+          try {
+            mtime = fs.statSync(target).mtime.toISOString();
+          } catch (e) {
+            /* ignore */
+          }
           sendJson(res, 200, {
             ok: true,
             complete: true,
             filename: path.basename(target),
             path: target,
-            parts: session.received
+            parts: session.received,
+            size: fs.existsSync(target) ? fs.statSync(target).size : undefined,
+            mtime
           });
         });
       });

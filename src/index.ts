@@ -638,9 +638,6 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
       await bootstrapIm();
       console.timeLog(TIME_LABEL, 'await bootstrapIm()');
 
-      // Batch downloader bridge (needs managers initialized)
-      mountTelDownloaderBridge();
-
       await fontsPromise;
       console.timeLog(TIME_LABEL, 'await fontsPromise');
 
@@ -653,5 +650,9 @@ function setDocumentLangPackProperties(langPack: LangPackDifference.langPackDiff
     } else {
       await bootstrapIm();
     }
+
+    // Batch downloader bridge (needs managers initialized) — must run for
+    // BOTH startup branches (animated first run and regular startup).
+    mountTelDownloaderBridge();
   }
 });

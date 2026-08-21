@@ -205,22 +205,22 @@
       if (!('serviceWorker' in navigator)) return;
       setTimeout(() => {
         navigator.serviceWorker.getRegistration().then((reg) => {
-          if (reg) return; // SW active — playback pipeline is fine
-          const banner = document.createElement("div");
-          banner.style.cssText =
-            "position:fixed;top:.8rem;right:.8rem;left:.8rem;z-index:9999;margin:0 auto;max-width:420px;" +
-            "background:#D16666;color:#fff;border-radius:14px;padding:.7rem 1rem;font-size:.8rem;" +
-            "box-shadow:0 8px 24px rgba(15,30,50,.3);display:flex;gap:.6rem;align-items:center;";
-          banner.innerHTML =
-            '<span style="font-weight:700;">\u26A0 Service Worker 未注册</span>' +
-            '<span style="flex:1;opacity:.95;">视频在线播放可能失败（媒体流修复依赖 SW）。' +
-            '通常是反向代理把 sw-*.js 重定向导致——请在绿联反代中放行本站全部路径。</span>' +
-            '<button id="tel-sw-banner-close" style="border:0;background:rgba(255,255,255,.25);color:#fff;' +
-            'border-radius:999px;width:1.4rem;height:1.4rem;cursor:pointer;font-size:.8rem;flex:none;">\u2715</button>';
-          const close = banner.querySelector("#tel-sw-banner-close");
-          close.onclick = () => banner.remove();
-          document.body.appendChild(banner);
-          setTimeout(() => banner.remove(), 20000);
+          if (reg) {
+            // SW is working — clear any previous fallback flag so the app
+            // runs with the full SW pipeline (stream caching, moov repair).
+            localStorage.removeItem('TEL_DL_NO_SW');
+            return;
+          }
+
+          // SW registration failed (likely green Cloud proxy adds a redirect).
+          // Silently switch to tweb's noServiceWorker fallback mode on the
+          // next load so the page runs cleanly without the error banner.
+          if (!localStorage.getItem('TEL_DL_NO_SW')) {
+            localStorage.setItem('TEL_DL_NO_SW', '1');
+            // Reload with ?noServiceWorker=1 so tweb skips SW registration
+            // on the next load (the inline script in index.html handles the redirect).
+            setTimeout(() => location.reload(), 800);
+          }
         }).catch(() => {});
       }, 6000);
     } catch (e) {

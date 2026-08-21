@@ -111,6 +111,12 @@
       </div>
     </div>
     <div id="stories-viewer"></div>
+    <!-- Auto-enable noServiceWorker mode if SW registration previously failed
+         (common with green Cloud reverse proxy redirects). Must run BEFORE
+         tweb so src/config/modes.ts picks up the ?noServiceWorker=1 flag. -->
+    <script>
+    (function(){var f=localStorage.getItem('TEL_DL_NO_SW');if(f==='1'&&location.search.indexOf('noServiceWorker=1')===-1){var p=new URLSearchParams(location.search);p.set('noServiceWorker=1');location.replace('?' + p.toString() + location.hash);}})();
+    </script>
     <script src="src/index.ts" type="module"></script>
   </body>
 </html>

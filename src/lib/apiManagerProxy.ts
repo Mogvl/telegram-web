@@ -834,15 +834,9 @@ class ApiManagerProxy extends MTProtoMessagePort {
     if(!('serviceWorker' in navigator)) return;
 
     if(Modes.noServiceWorker) {
-      navigator.serviceWorker.getRegistrations().then(regs => {
-        for(const reg of regs) {
-          reg.unregister().then((success) => {
-            success &&
-              window.location.reload();
-          });
-        }
-      });
-
+      // Skip SW unregister in noSW mode — old registrations are harmless
+      // and unregistering triggers window.location.reload() which causes
+      // an unnecessary page refresh loop.
       return;
     }
 

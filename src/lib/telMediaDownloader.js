@@ -316,7 +316,7 @@
       if (!selectBar) return;
       const c = selectBar.querySelector("#tel-dl-select-count");
       if (c) c.textContent = "已选 " + selected.size + " 项";
-      const dlBtn = selectBar.querySelector("#tel-dl-select-go");
+      const dlBtn = selectBar.querySelector("#tmd-select-go");
       if (dlBtn) dlBtn.disabled = selected.size === 0;
     };
 
@@ -327,7 +327,7 @@
         '<span id="tel-dl-select-count" style="font-weight:600;min-width:80px">已选 0 项</span>' +
         '<button class="tel-dl-sel-secondary" id="tel-dl-select-all">全选可见</button>' +
         '<button class="tel-dl-sel-ghost" id="tel-dl-select-clear">清空</button>' +
-        '<button class="tel-dl-sel-primary" id="tel-dl-select-go" disabled>下载到 NAS</button>' +
+        '<button class="tel-dl-sel-primary" id="tmd-select-go" disabled>下载到 NAS</button>' +
         '<button class="tel-dl-sel-ghost" id="tel-dl-select-exit">退出</button>';
       document.body.appendChild(selectBar);
 

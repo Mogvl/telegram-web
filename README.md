@@ -17,6 +17,8 @@
 - 🤖 Bot 支持、Web App 支持、星币/星礼、Premium 特性
 - 👥 群组成员管理、管理员、权限、邀请链接、频道广告收入统计等
 - ⬇️ **受限频道媒体下载到 NAS**：禁止下载/禁止保存的频道里的图片、视频、GIF、语音消息、故事，均可一键下载，文件直接保存到 NAS 挂载目录（基于 [Telegram Media Downloader](https://github.com/Neet-Nestor/Telegram-Media-Downloader) GPLv3，保存逻辑改为 NAS 后端）
+- 📥 **批量下载**：右下角"批量下载"面板 → 选择频道/群组 → 按类型（视频/图片/GIF/音频/文件）和格式（.mp4/.jpg…）筛选 → 勾选批量下载到 NAS
+- 🗂 **NAS 下载中心**：查看已下载文件列表（大小/时间）、实时下载进度、单删/批量删/清空已完成（NAS 文件同步删除）、点击文件名可直接预览
 
 > 说明：与所有官方 Web 客户端相同，「私密对话（Secret Chat）」不支持——这是 Telegram 官方 Web 版的平台限制。
 

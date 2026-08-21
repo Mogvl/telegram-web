@@ -627,7 +627,8 @@
       toggle.style.background = managerState.open ? "#B6C649" : "#6093B5";
       if (managerState.open) {
         refreshManagerList();
-        managerState.timer = setInterval(refreshManagerList, 3000);
+        const pollFn = () => { if (!document.hidden) refreshManagerList(); };
+        managerState.timer = setInterval(pollFn, 3000);
       } else {
         clearInterval(managerState.timer);
       }

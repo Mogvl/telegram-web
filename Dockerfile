@@ -29,10 +29,13 @@ RUN pnpm run build \
     && node scripts/check-dist-assets.mjs
 
 # ---------- runtime stage ----------
+# Source maps (~33MB) stay in the CI artifact for debugging but are not
+# shipped in the image.
 FROM nginx:1.27-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+RUN find /usr/share/nginx/html -name '*.map' -delete
 
 EXPOSE 80
 

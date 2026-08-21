@@ -350,28 +350,45 @@
 
       selectBar.querySelector("#tel-dl-select-exit").onclick = () => exit();
 
-      selectBar.querySelector("#tel-dl-select-go").onclick = async () => {
+      selectBar.querySelector("#tmd-select-go").onclick = async () => {
         if (selected.size === 0) return;
         const items = [...selected.values()];
         exit();
         const progressToast = showNasToast("⏳ 点选下载 0/" + items.length + "...");
         let ok = 0, bad = 0;
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
+
+        const withTimeout = (p, ms) => Promise.race([
+          p,
+          new Promise((_, rej) => setTimeout(() => rej(new Error("下载超时 " + ms + "s")), ms)),
+        ]);
+
+        const downloadOne = async (item, index) => {
           const ext = item.kind === "video" ? ".mp4" : ".jpg";
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-          const fileName = "download_" + ts + "_" + (i + 1) + ext;
+          const fileName = "download_" + ts + "_" + (index + 1) + ext;
           try {
-            await downloadUrlToNas(item.url, fileName);
+            await withTimeout(downloadUrlToNas(item.url, fileName), 30000);
             ok++;
-            if (progressToast) {
-              progressToast.querySelector("span").textContent =
-                "⏳ 点选下载 " + ok + "/" + items.length;
-            }
           } catch (e) {
             bad++;
+            logger.error("select download failed: " + fileName + " " + (e && e.message), "select");
           }
-        }
+          if (progressToast) {
+            const span = progressToast.querySelector("span");
+            if (span) span.textContent = "⏳ " + ok + "/" + items.length + " 成功" + (bad ? ", " + bad + " 失败" : "");
+          }
+        };
+
+        const CONCURRENCY = 3;
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < items.length) {
+            const idx = cursor++;
+            await downloadOne(items[idx], idx);
+          }
+        };
+        await Promise.all(Array.from({length: Math.min(CONCURRENCY, items.length)}, worker));
+
         if (progressToast) progressToast.remove();
         showNasToast("✓ 点选下载完成：" + ok + " 成功" + (bad ? "，" + bad + " 失败" : ""));
       };

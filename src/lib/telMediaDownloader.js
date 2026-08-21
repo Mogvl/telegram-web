@@ -250,11 +250,31 @@
       return true;
     };
 
-    const mediaUrl = (el) =>
-      el.tagName === "VIDEO" ? (el.src || el.currentSrc || el.querySelector("source")?.src || "") :
-      (el.src || el.currentSrc || "");
+    // Detect if an <img> is a video poster (inside a container that also has <video>)
+    const isVideoThumb = (el) => {
+      if (el.tagName !== "IMG") return false;
+      const host = el.closest(".Message, .message, .bubble") || el.parentElement;
+      return host ? !!host.querySelector("video") : false;
+    };
+    // For a video thumbnail, get the VIDEO element's src instead of the img's src
+    const videoSrcOfThumb = (el) => {
+      const host = el.closest(".Message, .message, .bubble") || el.parentElement;
+      if (!host) return "";
+      const v = host.querySelector("video");
+      return v ? (v.src || v.currentSrc || v.querySelector("source")?.src || "") : "";
+    };
 
-    const mediaKind = (el) => el.tagName === "VIDEO" ? "video" : "image";
+    const mediaUrl = (el) => {
+      if (el.tagName === "VIDEO") return el.src || el.currentSrc || el.querySelector("source")?.src || "";
+      if (isVideoThumb(el)) return videoSrcOfThumb(el) || el.src || el.currentSrc || "";
+      return el.src || el.currentSrc || "";
+    };
+
+    const mediaKind = (el) => {
+      if (el.tagName === "VIDEO") return "video";
+      if (isVideoThumb(el)) return "video";
+      return "image";
+    };
 
     const injectSelectStyles = () => {
       if (document.getElementById("tel-dl-select-css")) return;

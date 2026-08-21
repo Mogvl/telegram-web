@@ -335,7 +335,7 @@
         document.querySelectorAll(".tel-dl-pick").forEach((cb) => {
           const key = cb.dataset.url;
           if (key && !selected.has(key)) {
-            selected.set(key, { kind: cb.dataset.kind, url: key });
+            selected.set(key, { kind: cb.dataset.kind, url: key, el: cb.parentElement });
             cb.classList.add("on");
           }
         });
@@ -367,7 +367,10 @@
           const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
           const fileName = "download_" + ts + "_" + (index + 1) + ext;
           try {
-            await withTimeout(downloadUrlToNas(item.url, fileName), 30000);
+            // Re-read URL from DOM at download time: blob URLs may have
+            // expired since selection (tweb LRU revokes old blobs).
+            const freshUrl = (item.el && mediaUrl(item.el)) || item.url;
+            await withTimeout(downloadUrlToNas(freshUrl, fileName), 30000);
             ok++;
           } catch (e) {
             bad++;

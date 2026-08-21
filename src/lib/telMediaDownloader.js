@@ -354,17 +354,26 @@
         if (selected.size === 0) return;
         const items = [...selected.values()];
         exit();
-        showNasToast("开始下载 " + items.length + " 个文件到 NAS...");
+        const progressToast = showNasToast("⏳ 点选下载 0/" + items.length + "...");
         let ok = 0, bad = 0;
-        for (const item of items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const ext = item.kind === "video" ? ".mp4" : ".jpg";
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          const fileName = "download_" + ts + "_" + (i + 1) + ext;
           try {
-            await downloadUrlToNas(item.url, "sel_" + Date.now() + "_" + (++ok) + (item.kind === "video" ? ".mp4" : ".jpg"));
-            showNasToast("✓ 已下载 " + ok + "/" + items.length + " 到 NAS");
+            await downloadUrlToNas(item.url, fileName);
+            ok++;
+            if (progressToast) {
+              progressToast.querySelector("span").textContent =
+                "⏳ 点选下载 " + ok + "/" + items.length;
+            }
           } catch (e) {
             bad++;
           }
         }
-        showNasToast("点选下载完成：" + ok + " 成功" + (bad ? "，" + bad + " 失败" : ""));
+        if (progressToast) progressToast.remove();
+        showNasToast("✓ 点选下载完成：" + ok + " 成功" + (bad ? "，" + bad + " 失败" : ""));
       };
     };
 

@@ -1,6 +1,5 @@
 /**
- * telDownloaderBridge — exposes tweb's message APIs to the NAS batch downloader
- * (src/lib/telMediaDownloader.js).
+ * telDownloaderBridge — exposes tweb's message APIs to the NAS batch downloader.
  *
  * The downloader runs as a standalone script and cannot reach tweb's managers;
  * this module (bundled with the app) mounts a small, controlled API on
@@ -52,12 +51,8 @@ const FILTERS: {[k: string]: any} = {
 
 async function listDialogs(): Promise<BatchDialog[]> {
   const managers = rootScope.managers;
-  // fetch ALL dialogs (paginated), not just the first page. getDialogs'
-  // `offsetIndex` is a dialog SORT INDEX (a large date-based value), NOT a
-  // page offset — the cursor for the next page is the previous page's last
-  // dialog index. Passing a count (0, 200, 400…) makes the storage scan past
-  // the end and return an empty page, silently truncating the list to the
-  // first ~200 dialogs.
+  // Fetch ALL dialogs (paginated). getDialogs' offsetIndex is a dialog
+  // sort index (large date-based value), not a page offset.
   const indexKey = getDialogIndexKey(FOLDER_ID_ALL);
   const seen = new Set<number>();
   const dialogs: any[] = [];
@@ -79,7 +74,6 @@ async function listDialogs(): Promise<BatchDialog[]> {
 
     const last = pageDialogs[pageDialogs.length - 1];
     const lastIndex = getDialogIndex(last, indexKey);
-    // no cursor / no progress ⇒ already at the tail (or order changed) — stop
     if(!lastIndex || (offsetIndex && lastIndex >= offsetIndex)) break;
     offsetIndex = lastIndex;
   }
@@ -88,7 +82,7 @@ async function listDialogs(): Promise<BatchDialog[]> {
 
   for(const d of dialogs) {
     const peerId = d.peerId;
-    if(peerId === rootScope.myId) continue; // skip Saved Messages
+    if(peerId === rootScope.myId) continue;
 
     let title = '';
     let type: BatchDialog['type'] = 'user';
@@ -114,21 +108,36 @@ async function listDialogs(): Promise<BatchDialog[]> {
 async function searchMedia(
   peerId: PeerId,
   filter: string,
-  limit = 50,
+  limit = 200,
   offsetId = 0
 ): Promise<{items: BatchMediaItem[], count: number}> {
   const managers = rootScope.managers;
   const inputFilter = FILTERS[filter] || {_: 'inputMessagesFilterEmpty'};
 
-  const res = await managers.appMessagesManager.requestHistory({
-    peerId,
-    limit,
-    offsetId,
-    inputFilter
-  } as any);
+  // Call the raw API directly instead of requestHistory: requestHistory
+  // internally calls saveApiResult which replaces the returned messages
+  // array with an empty one, so the bridge would always see zero items.
+  const [peer, offsetPeer] = await Promise.all([
+    managers.appPeersManager.getInputPeerById(peerId),
+    managers.appPeersManager.getInputPeerById(peerId)
+  ]);
 
-  const messages: any[] = (res as any).messages || [];
-  const count = (res as any).count || messages.length;
+  const res: any = await managers.apiManager.invokeApiSingle('messages.search', {
+    peer,
+    q: '',
+    filter: inputFilter,
+    limit,
+    offset_id: offsetId,
+    add_offset: 0,
+    max_id: 0,
+    min_id: 0,
+    min_date: 0,
+    max_date: 0,
+    hash: 0
+  });
+
+  const messages: any[] = res?.messages || [];
+  const count = res?.count || messages.length;
   const items: BatchMediaItem[] = [];
 
   for(const msg of messages) {
@@ -164,7 +173,7 @@ async function searchMedia(
         continue;
       }
     } catch(err) {
-      continue; // skip media we cannot build a URL for
+      continue;
     }
 
     if(base.url) items.push(base);

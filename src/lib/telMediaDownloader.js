@@ -228,6 +228,178 @@
     }
   };
 
+
+  /* ============ Point-and-click download mode ============ */
+  const selectMode = (() => {
+    let active = false;
+    const selected = new Map(); // key -> {kind, url, el}
+
+    const MEDIA_IN_CHAT =
+      ".bubbles img:not(.avatar):not([class*='avatar']), .bubbles video";
+
+    const isContentMedia = (el) => {
+      if (!el) return false;
+      if (el.closest(".avatar, .Avatar, .reaction, .sticker, .sidebar-left, .chatlist")) return false;
+      const src = el.tagName === "VIDEO" ? (el.src || el.currentSrc || "") : (el.src || el.currentSrc || "");
+      if (!src || src.startsWith("data:")) return false;
+      if (el.tagName === "IMG") {
+        const w = el.naturalWidth || el.width || 0;
+        const h = el.naturalHeight || el.height || 0;
+        if (w && w < 80 && h && h < 80) return false;
+      }
+      return true;
+    };
+
+    const mediaUrl = (el) =>
+      el.tagName === "VIDEO" ? (el.src || el.currentSrc || el.querySelector("source")?.src || "") :
+      (el.src || el.currentSrc || "");
+
+    const mediaKind = (el) => el.tagName === "VIDEO" ? "video" : "image";
+
+    const injectSelectStyles = () => {
+      if (document.getElementById("tel-dl-select-css")) return;
+      const s = document.createElement("style");
+      s.id = "tel-dl-select-css";
+      s.textContent = `
+        .tel-dl-pick{position:absolute!important;top:6px;right:6px;width:24px;height:24px;
+          border-radius:50%;background:rgba(0,0,0,.55);border:2px solid #fff;
+          box-shadow:0 0 0 2px rgba(0,0,0,.35);cursor:pointer;z-index:9999;
+          display:flex;align-items:center;justify-content:center;color:#fff;
+          font:700 13px/1 system-ui,sans-serif;user-select:none;transition:background .15s}
+        .tel-dl-pick:hover{background:rgba(33,150,243,.85)}
+        .tel-dl-pick.on{background:#2196f3;border-color:#fff}
+        .tel-dl-pick.on::before{content:"\u2713"}
+        #tel-dl-select-bar{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+          background:rgba(20,24,30,.95);color:#fff;padding:10px 16px;border-radius:10px;
+          display:flex;gap:10px;align-items:center;font:13px/1.4 system-ui,sans-serif;
+          box-shadow:0 12px 40px rgba(0,0,0,.5);z-index:10000}
+        #tel-dl-select-bar button{padding:6px 14px;border-radius:5px;border:none;cursor:pointer;
+          font-size:13px;font-family:inherit}
+        .tel-dl-sel-primary{background:#4caf50;color:#fff}
+        .tel-dl-sel-secondary{background:#2196f3;color:#fff}
+        .tel-dl-sel-ghost{background:transparent;color:#fff;border:1px solid #666}
+      `;
+      document.head.appendChild(s);
+    };
+
+    const scanAll = () => {
+      document.querySelectorAll(MEDIA_IN_CHAT).forEach(addPick);
+    };
+
+    const addPick = (el) => {
+      if (!isContentMedia(el)) return;
+      if (el.closest(".Message") && el.querySelector(".tel-dl-pick")) return;
+      const host = el.closest(".Message, .message, .bubble") || el.parentElement;
+      if (!host) return;
+      if (!host.style.position) host.style.position = "relative";
+      const cb = document.createElement("div");
+      cb.className = "tel-dl-pick";
+      cb.dataset.url = mediaUrl(el);
+      cb.dataset.kind = mediaKind(el);
+      cb.onclick = (e) => {
+        e.stopPropagation();
+        const key = cb.dataset.url;
+        if (selected.has(key)) {
+          selected.delete(key);
+          cb.classList.remove("on");
+        } else {
+          selected.set(key, { kind: cb.dataset.kind, url: key });
+          cb.classList.add("on");
+        }
+        updateSelectCount();
+      };
+      host.appendChild(cb);
+    };
+
+    let selectBar = null;
+    const updateSelectCount = () => {
+      if (!selectBar) return;
+      const c = selectBar.querySelector("#tel-dl-select-count");
+      if (c) c.textContent = "已选 " + selected.size + " 项";
+      const dlBtn = selectBar.querySelector("#tel-dl-select-go");
+      if (dlBtn) dlBtn.disabled = selected.size === 0;
+    };
+
+    const buildBar = () => {
+      selectBar = document.createElement("div");
+      selectBar.id = "tel-dl-select-bar";
+      selectBar.innerHTML =
+        '<span id="tel-dl-select-count" style="font-weight:600;min-width:80px">已选 0 项</span>' +
+        '<button class="tel-dl-sel-secondary" id="tel-dl-select-all">全选可见</button>' +
+        '<button class="tel-dl-sel-ghost" id="tel-dl-select-clear">清空</button>' +
+        '<button class="tel-dl-sel-primary" id="tel-dl-select-go" disabled>下载到 NAS</button>' +
+        '<button class="tel-dl-sel-ghost" id="tel-dl-select-exit">退出</button>';
+      document.body.appendChild(selectBar);
+
+      selectBar.querySelector("#tel-dl-select-all").onclick = () => {
+        document.querySelectorAll(".tel-dl-pick").forEach((cb) => {
+          const key = cb.dataset.url;
+          if (key && !selected.has(key)) {
+            selected.set(key, { kind: cb.dataset.kind, url: key });
+            cb.classList.add("on");
+          }
+        });
+        updateSelectCount();
+      };
+
+      selectBar.querySelector("#tel-dl-select-clear").onclick = () => {
+        selected.clear();
+        document.querySelectorAll(".tel-dl-pick.on").forEach((cb) => cb.classList.remove("on"));
+        updateSelectCount();
+      };
+
+      selectBar.querySelector("#tel-dl-select-exit").onclick = () => exit();
+
+      selectBar.querySelector("#tel-dl-select-go").onclick = async () => {
+        if (selected.size === 0) return;
+        const items = [...selected.values()];
+        exit();
+        showNasToast("开始下载 " + items.length + " 个文件到 NAS...");
+        let ok = 0, bad = 0;
+        for (const item of items) {
+          try {
+            await downloadUrlToNas(item.url, "sel_" + Date.now() + "_" + (++ok) + (item.kind === "video" ? ".mp4" : ".jpg"));
+            showNasToast("✓ 已下载 " + ok + "/" + items.length + " 到 NAS");
+          } catch (e) {
+            bad++;
+          }
+        }
+        showNasToast("点选下载完成：" + ok + " 成功" + (bad ? "，" + bad + " 失败" : ""));
+      };
+    };
+
+    const enter = () => {
+      if (active) return;
+      active = true;
+      injectSelectStyles();
+      scanAll();
+      buildBar();
+      const observer = new MutationObserver(() => scanAll());
+      observer.observe(document.body, { childList: true, subtree: true });
+      const onScroll = () => setTimeout(scanAll, 200);
+      document.addEventListener("scroll", onScroll, true);
+      selectBar._cleanup = () => {
+        observer.disconnect();
+        document.removeEventListener("scroll", onScroll, true);
+      };
+    };
+
+    const exit = () => {
+      if (!active) return;
+      active = false;
+      document.querySelectorAll(".tel-dl-pick").forEach((el) => el.remove());
+      if (selectBar) {
+        selectBar._cleanup && selectBar._cleanup();
+        selectBar.remove();
+        selectBar = null;
+      }
+      selected.clear();
+    };
+
+    return { enter, exit, toggle: () => (active ? exit() : enter()), isActive: () => active };
+  })();
+
+
   /* ============ NAS download manager ============ */
   const managerState = {
     open: false,
@@ -620,6 +792,19 @@
     toggle.className = "tel-dl-fab";
     toggle.style.cssText =
       fabPosition(5.5) + "background:#6093B5;color:#fff;";
+
+    const selectToggle = document.createElement("button");
+    selectToggle.id = "tel-dl-select-toggle";
+    selectToggle.innerText = "☑ 点选下载";
+    selectToggle.className = "tel-dl-fab";
+    selectToggle.style.cssText =
+      fabPosition(7.0) + "background:#2196f3;color:#fff;";
+    selectToggle.onclick = () => {
+      selectMode.toggle();
+      selectToggle.style.background = selectMode.isActive() ? "#E53935" : "#2196f3";
+      selectToggle.innerText = selectMode.isActive() ? "✕ 退出点选" : "☑ 点选下载";
+    };
+    document.body.appendChild(selectToggle);
     toggle.onclick = () => {
       managerState.open = !managerState.open;
       const panel = document.getElementById("tel-dl-manager-panel");

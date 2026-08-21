@@ -374,8 +374,9 @@
       injectSelectStyles();
       scanAll();
       buildBar();
+      const bubblesEl = document.querySelector(".bubbles") || document.querySelector(".chat-content");
       const observer = new MutationObserver(() => scanAll());
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer.observe(bubblesEl || document.body, { childList: true, subtree: true });
       const onScroll = () => setTimeout(scanAll, 200);
       document.addEventListener("scroll", onScroll, true);
       selectBar._cleanup = () => {
@@ -791,14 +792,14 @@
     toggle.innerText = "NAS 下载中心";
     toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      fabPosition(5.5) + "background:#6093B5;color:#fff;";
+      fabPosition(5.0) + "background:#6093B5;color:#fff;";
 
     const selectToggle = document.createElement("button");
     selectToggle.id = "tel-dl-select-toggle";
     selectToggle.innerText = "☑ 点选下载";
     selectToggle.className = "tel-dl-fab";
     selectToggle.style.cssText =
-      fabPosition(7.0) + "background:#2196f3;color:#fff;";
+      fabPosition(9.0) + "background:#2196f3;color:#fff;";
     selectToggle.onclick = () => {
       selectMode.toggle();
       selectToggle.style.background = selectMode.isActive() ? "#E53935" : "#2196f3";
@@ -2177,7 +2178,7 @@ const getVideoUrl = (video) =>
     toggle.innerText = "批量下载";
     toggle.className = "tel-dl-fab";
     toggle.style.cssText =
-      fabPosition(8.8) + "background:#B6C649;color:#fff;";
+      fabPosition(7.0) + "background:#B6C649;color:#fff;";
     toggle.onclick = () => {
       batchState.open = !batchState.open;
       const panel = batchEl();

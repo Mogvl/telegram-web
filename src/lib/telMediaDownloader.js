@@ -1709,7 +1709,7 @@ const getVideoUrl = (video) =>
     try {
       for (const key of filters) {
         if (seq !== batchState.renderSeq) return -1; // superseded by a tab/view switch
-        const res = await bridge.searchMedia(peerId, key, 100, offsetId || 0);
+        const res = await bridge.searchMedia(peerId, key, 200, offsetId || 0);
         fetched = fetched.concat(res.items || []);
       }
     } catch (e) {
